@@ -604,6 +604,9 @@ class ComposingActionTag with ChangeNotifier implements Editable {
   void reset() {
     _value = null;
   }
+
+  @override
+  void checkpoint() {}
 }
 
 typedef OnUpdateComposingActionTag = void Function(IndexedTag? composingActionTag);

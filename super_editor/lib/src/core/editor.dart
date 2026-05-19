@@ -434,6 +434,30 @@ class Editor implements RequestDispatcher {
     _notifyListeners([]);
   }
 
+  /// Wipes the undo and redo stacks and anchors each [Editable]'s reset
+  /// snapshot to the document's current state.
+  ///
+  /// Use this when the conceptual "session" ends and the current content
+  /// should become the new origin — e.g. a chat composer sending a message,
+  /// or switching to a different draft. Without this, dispatching a
+  /// [ClearDocumentRequest] (or any other content-replacing command) leaves
+  /// the snapshot pointing at the document the editor was constructed with,
+  /// and a future undo replays history from that stale baseline against
+  /// node IDs that no longer exist — throwing "No such position in
+  /// document".
+  ///
+  /// No-op when history is disabled.
+  void clearHistory() {
+    if (!isHistoryEnabled) {
+      return;
+    }
+    _history.clear();
+    _future.clear();
+    for (final editable in context._resources.values) {
+      editable.checkpoint();
+    }
+  }
+
   void redo() {
     if (!isHistoryEnabled) {
       // History is disabled, therefore undo/redo are disabled.
@@ -750,6 +774,17 @@ abstract mixin class Editable {
 
   /// Resets this [Editable] to its initial state.
   void reset() {}
+
+  /// Anchors the "initial state" used by [reset] to this [Editable]'s
+  /// *current* state.
+  ///
+  /// [Editor.clearHistory] calls this on every [Editable] so that a later
+  /// undo (with a now-empty history) won't roll the document back past the
+  /// point at which history was cleared.
+  ///
+  /// Default implementation is a no-op for editables that don't track an
+  /// initial-state snapshot.
+  void checkpoint() {}
 }
 
 /// An object that processes [EditRequest]s.
@@ -1119,7 +1154,11 @@ class MutableDocument with Iterable<DocumentNode> implements Document, Editable 
     _listeners.clear();
   }
 
-  late final List<DocumentNode> _latestNodesSnapshot;
+  // The undo target used by [reset]. Captured at construction time and
+  // re-captured by [checkpoint] when the editor signals that history has
+  // been wiped — see [Editor.clearHistory]. Mutable so callers can advance
+  // the snapshot to the current state instead of recreating the document.
+  late List<DocumentNode> _latestNodesSnapshot;
   bool _didReset = false;
 
   final List<DocumentNode> _nodes;
@@ -1415,6 +1454,14 @@ class MutableDocument with Iterable<DocumentNode> implements Document, Editable 
     _refreshNodeIdCaches();
 
     _didReset = true;
+  }
+
+  @override
+  void checkpoint() {
+    // Anchor the undo baseline to the current node list. A later
+    // [Editor.undo] (after fresh history accumulates) will rewind to this
+    // state instead of the document the constructor captured.
+    _latestNodesSnapshot = List.from(_nodes);
   }
 
   /// Updates all the maps which use the node id as the key.

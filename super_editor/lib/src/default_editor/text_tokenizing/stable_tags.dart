@@ -1097,6 +1097,9 @@ class StableTagIndex with ChangeNotifier implements Editable {
     _committedTags.clear();
     _cancelledTags.clear();
   }
+
+  @override
+  void checkpoint() {}
 }
 
 class ComposingStableTag {

@@ -182,6 +182,9 @@ class PatternTagIndex with ChangeNotifier implements Editable {
   void reset() {
     _tags.clear();
   }
+
+  @override
+  void checkpoint() {}
 }
 
 /// An [EditReaction] that creates, updates, and removes pattern tags.

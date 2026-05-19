@@ -31,6 +31,9 @@ class DocumentLayoutEditable implements Editable {
 
   @override
   void reset() {}
+
+  @override
+  void checkpoint() {}
 }
 
 /// Abstract representation of a document layout.

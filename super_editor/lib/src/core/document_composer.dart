@@ -176,6 +176,11 @@ class MutableDocumentComposer extends DocumentComposer implements Editable {
     _composingRegion.value = null;
     _didReset = true;
   }
+
+  @override
+  void checkpoint() {
+    // No-op: the composer has no stored "initial state" to re-anchor.
+  }
 }
 
 /// Holds preferences about user input, to be used for the
