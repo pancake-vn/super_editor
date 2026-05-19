@@ -911,64 +911,18 @@ class LinkifyReaction extends EditReaction {
 //       and the paste behavior in common_editor_operations. Once we create a way for reactions to identify
 //       paste behaviors, move the paste linkification into the linkify reaction and make this private again.
 Uri? tryToParseUrl(String word) {
-  // First, try extracting emails.
-  final extractedEmails = linkify(
-    word,
-    options: const LinkifyOptions(
-      humanize: false,
-      looseUrl: true,
-    ),
-    linkifiers: [
-      const EmailLinkifier(),
-    ],
-  );
-  final int emailCount = extractedEmails.fold(0, (value, element) => element is EmailElement ? value + 1 : value);
-  if (emailCount == 1) {
-    // Found exactly one email. Create and return a link attribution.
-    final emailElement = extractedEmails.first as EmailElement;
-    return Uri(
-      scheme: "mailto",
-      path: emailElement.emailAddress,
-    );
+  if (!word.startsWith('http://') && !word.startsWith('https://')) {
+    return null;
   }
-
-  // Second, try extracting HTTP URLs.
-  final extractedLinks = linkify(
-    word,
-    options: const LinkifyOptions(
-      humanize: false,
-      looseUrl: true,
-    ),
-    linkifiers: [
-      const UrlLinkifier(),
-    ],
-  );
-  final int linkCount = extractedLinks.fold(0, (value, element) => element is UrlElement ? value + 1 : value);
-  if (linkCount == 1) {
-    // Found exactly 1 URL. Create and return an attribution.
-    try {
-      // Try to parse the word as a link.
-      final uri = Uri.parse(word);
-      if (uri.hasScheme) {
-        // URL is fully specified. Return it.
-        return uri;
-      }
-
-      // The URL is missing a scheme. Add "https:" and re-parse.
-      return Uri.parse("https://$word");
-    } catch (exception) {
-      // Something went wrong parsing the link. Fizzle.
-      return null;
+  try {
+    final uri = Uri.parse(word);
+    if (uri.hasScheme) {
+      return uri;
     }
+    return null;
+  } catch (_) {
+    return null;
   }
-
-  // Third, try directly parsing a non-http URL.
-  if (word.contains("://")) {
-    return Uri.tryParse(word);
-  }
-
-  // Didn't find a URL in the given text.
-  return null;
 }
 
 /// Configuration for the action that should happen when a text containing

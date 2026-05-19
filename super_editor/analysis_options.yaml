@@ -9,3 +9,12 @@ linter:
         use_key_in_widget_constructors: false
         avoid_renaming_method_parameters: false
         always_use_package_imports: true
+
+# Honored by `dart format` (dart_style 3.x). Upstream's
+# `.vscode/settings.json` sets `dart.lineLength: 120` for VS Code's
+# "Format Document", but that's per-editor — the CLI defaults to 80 and
+# produces large fan-out diffs against the existing source. Setting
+# `page_width` here makes the 120-column convention consistent across
+# `dart format`, JetBrains, Cursor, and any other tooling.
+formatter:
+    page_width: 120
