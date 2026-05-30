@@ -2,6 +2,7 @@ export 'document_delta_editing.dart';
 export 'document_ime_communication.dart';
 export 'document_ime_interaction_policies.dart';
 export 'document_serialization.dart';
+export 'ime_desync.dart';
 export 'ime_decoration.dart';
 export 'ime_keyboard_control.dart';
 export 'mobile_toolbar.dart';

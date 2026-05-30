@@ -1249,6 +1249,170 @@ Paragraph two
       });
     });
 
+    // Pancake fork: DocumentImeSerializer must never emit a TextEditingValue
+    // with an invalid composing region, otherwise the platform rejects every
+    // subsequent edit and the text field freezes. This can happen, rarely,
+    // when a content edit shortens a node while an IME composition is still
+    // active. Instead of throwing/emitting garbage, the serializer drops the
+    // bad composing region and reports it via [onComposingRegionDesync].
+    group('invalid composing region (pancake fork)', () {
+      tearDown(() {
+        DocumentImeSerializer.onComposingRegionDesync = null;
+        DocumentImeSerializer.onImePositionUnmappable = null;
+      });
+
+      test('inbound: clamps an unmappable IME position instead of throwing', () {
+        ImePositionDesync? reported;
+        DocumentImeSerializer.onImePositionUnmappable = (d) => reported = d;
+
+        final serializer = DocumentImeSerializer(
+          MutableDocument(nodes: [
+            ParagraphNode(id: "1", text: AttributedText("hi")), // 2 chars
+          ]),
+          const DocumentSelection.collapsed(
+            position: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 2)),
+          ),
+          null,
+        );
+
+        // The IME asks to map an offset far past the serialized text (its view
+        // drifted from ours). Upstream throws here; we clamp to the end instead.
+        final position = serializer.imeToDocumentSelection(
+          const TextSelection.collapsed(offset: 999),
+        );
+
+        expect(position, isNotNull);
+        expect(position!.extent.nodeId, "1");
+        // Clamped to the end of "hi" (offset 2). The serialized text has the
+        // 2-char invisible prefix, so the doc offset is 999 - rangeStart, capped.
+        expect((position.extent.nodePosition as TextNodePosition).offset, 2);
+        expect(reported, isNotNull);
+        expect(reported!.imeOffset, 999);
+      });
+
+      test('drops a composing region whose offset is past the (shortened) node text', () {
+        ImeComposingRegionDesync? reported;
+        DocumentImeSerializer.onComposingRegionDesync = (d) => reported = d;
+
+        final value = DocumentImeSerializer(
+          MutableDocument(nodes: [
+            ParagraphNode(id: "1", text: AttributedText("hi")), // only 2 chars
+          ]),
+          const DocumentSelection.collapsed(
+            position: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 2)),
+          ),
+          // Composing region [6, 11] is far past the 2-char node — the corrupt
+          // state produced when an edit shortens text mid-composition.
+          const DocumentRange(
+            start: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 6)),
+            end: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 11)),
+          ),
+        ).toTextEditingValue();
+
+        // Composing dropped to "none" (empty range) — the platform accepts this,
+        // so editing keeps working. Crucially it is NOT a valid range past the
+        // end of the text, which is what froze the field.
+        expect(value.composing, TextRange.empty);
+        expect(value.composing.isValid, isFalse);
+        expect(reported, isNotNull);
+        expect(reported!.imeTextLength, value.text.length);
+      });
+
+      test('drops a composing region that lives on a node outside the serialized selection', () {
+        ImeComposingRegionDesync? reported;
+        DocumentImeSerializer.onComposingRegionDesync = (d) => reported = d;
+
+        final value = DocumentImeSerializer(
+          MutableDocument(nodes: [
+            ParagraphNode(id: "1", text: AttributedText("first")),
+            ParagraphNode(id: "2", text: AttributedText("second")),
+          ]),
+          // Selection only covers node "1", so only "1" is serialized.
+          const DocumentSelection.collapsed(
+            position: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 0)),
+          ),
+          // Composing region points at node "2", which isn't in the serialization.
+          const DocumentRange(
+            start: DocumentPosition(nodeId: "2", nodePosition: TextNodePosition(offset: 0)),
+            end: DocumentPosition(nodeId: "2", nodePosition: TextNodePosition(offset: 6)),
+          ),
+        ).toTextEditingValue();
+
+        expect(value.composing, TextRange.empty);
+        expect(value.composing.isValid, isFalse);
+        expect(reported, isNotNull);
+      });
+
+      test('forwards a valid composing region unchanged and does not report', () {
+        var reportedCount = 0;
+        DocumentImeSerializer.onComposingRegionDesync = (_) => reportedCount++;
+
+        final value = DocumentImeSerializer(
+          MutableDocument(nodes: [
+            ParagraphNode(id: "1", text: AttributedText("hello world")),
+          ]),
+          const DocumentSelection.collapsed(
+            position: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 11)),
+          ),
+          const DocumentRange(
+            start: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 6)),
+            end: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 11)),
+          ),
+        ).toTextEditingValue();
+
+        // 2 invisible prepended chars are NOT added here (caret isn't at offset 0),
+        // so the composing region maps straight through and stays valid.
+        expect(value.isComposingRangeValid, isTrue);
+        expect(value.composing.isValid, isTrue);
+        expect(reportedCount, 0);
+      });
+
+      // End-to-end recovery: when the live editor ends up with an out-of-range
+      // composing region, the serializer drops it (reported via the hook, so no
+      // garbage reaches the platform and the field stays editable), and the IME
+      // client clears the stale composing region from the composer on the next
+      // frame so the desync doesn't repeat.
+      // Mobile-only: the desktop flutter_test harness doesn't keep the IME
+      // connection attached across the frame, so the post-frame recovery (which
+      // is correctly gated on an attached IME) doesn't run there. The serializer
+      // drop itself is platform-independent and covered by the unit tests above.
+      testWidgetsOnMobile('clears a stale out-of-range composing region from the composer', (tester) async {
+        ImeComposingRegionDesync? reported;
+        DocumentImeSerializer.onComposingRegionDesync = (d) => reported = d;
+
+        final testContext = await tester
+            .createDocument() //
+            .fromMarkdown('hi')
+            .withInputSource(TextInputSource.ime)
+            .pump();
+
+        await tester.placeCaretInParagraph(testContext.document.first.id, 2);
+
+        // Force the corrupt state: a composing region whose offsets are far past
+        // the 2-char node (what an edit shortening text mid-composition leaves
+        // behind).
+        final nodeId = testContext.document.first.id;
+        testContext.editor.execute([
+          ChangeComposingRegionRequest(
+            DocumentRange(
+              start: DocumentPosition(nodeId: nodeId, nodePosition: const TextNodePosition(offset: 6)),
+              end: DocumentPosition(nodeId: nodeId, nodePosition: const TextNodePosition(offset: 11)),
+            ),
+          ),
+        ]);
+        await tester.pump();
+
+        // The serializer detected and dropped the invalid region (the unit tests
+        // above prove the emitted composing range is empty, not out-of-range).
+        expect(reported, isNotNull);
+
+        // The IME client clears the stale composing region from the composer on
+        // the next frame, so subsequent frames are clean and stop re-dropping.
+        await tester.pump();
+        expect(testContext.composer.composingRegion.value, isNull);
+      });
+    });
+
     group('typing characters near a link', () {
       testWidgetsOnMobile('does not expand the link when inserting before the link', (tester) async {
         // Configure and render a document.

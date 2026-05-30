@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:super_editor/src/core/document.dart';
+import 'package:super_editor/src/core/document_composer.dart';
 import 'package:super_editor/src/core/document_selection.dart';
 import 'package:super_editor/src/infrastructure/_logging.dart';
 import 'package:super_editor/src/infrastructure/platforms/ios/ios_document_controls.dart';
@@ -279,6 +280,36 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
     editorImeLog.fine("[DocumentImeInputClient] - Done sending document to IME");
 
     _isSendingToIme = false;
+
+    // Pancake fork: the serializer just had to discard an invalid composing
+    // region to avoid freezing the field (see DocumentImeSerializer
+    // ._safeImeComposingRange). The emitted value is now safe, but the
+    // composer still holds the stale composing region, so the next frame would
+    // hit the same desync. Clear it once, after this frame, so the stored state
+    // converges and we stop re-dropping it. Scheduled post-frame because we're
+    // inside a selection/composing-region notification right now and must not
+    // dispatch a re-entrant edit.
+    if (imeSerialization.didDropComposingRegion) {
+      _scheduleComposingRegionHeal();
+    }
+  }
+
+  bool _isHealScheduled = false;
+
+  void _scheduleComposingRegionHeal() {
+    if (_isHealScheduled) return;
+    _isHealScheduled = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _isHealScheduled = false;
+      if (!attached) return;
+
+      // Already cleared by a real IME delta in the meantime.
+      if (textDeltasDocumentEditor.composingRegion.value == null) return;
+
+      editorImeLog.fine("[DocumentImeInputClient] - Clearing stale composing region to recover from an IME desync.");
+      textDeltasDocumentEditor.editor.execute(const [ClearComposingRegionRequest()]);
+    });
   }
 
   @override

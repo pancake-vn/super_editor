@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/services.dart';
 import 'package:super_editor/src/core/document.dart';
+import 'package:super_editor/src/default_editor/document_ime/ime_desync.dart';
 import 'package:super_editor/src/core/document_selection.dart';
 import 'package:super_editor/src/default_editor/selection_upstream_downstream.dart';
 import 'package:super_editor/src/default_editor/text.dart';
@@ -290,25 +291,79 @@ class DocumentImeSerializer {
       }
     }
 
-    editorImeLog.shout("---------------DocumentImeSerializer----------------------");
-    editorImeLog.shout("Couldn't map an IME position to a document position.");
-    editorImeLog.shout("Desired IME position: '$imePosition'");
-    editorImeLog.shout("");
-    editorImeLog.shout("IME text: '$imeText'");
-    editorImeLog.shout("IME prepended placeholder: '$_prependedPlaceholder'");
-    editorImeLog.shout("");
-    editorImeLog.shout("Document selection: $selection");
-    editorImeLog.shout("Document composing region: $composingRegion");
-    editorImeLog.shout("");
-    editorImeLog.shout("IME Ranges to text nodes:");
-    for (final entry in imeRangesToDocTextNodes.entries) {
-      editorImeLog.shout(" - IME range: ${entry.key} -> Text node: ${entry.value}");
-      editorImeLog.shout("    ^ node content: '${(_doc.getNodeById(entry.value) as TextNode).text.toPlainText()}'");
-    }
-    editorImeLog.shout("-----------------------------------------------------------");
-    throw Exception(
-        "Couldn't map an IME position to a document position. \nTextEditingValue: '$imeText'\nIME position: $imePosition");
+    // Pancake fork: the IME asked us to map a position that isn't inside any
+    // serialized node range. This is the inbound twin of the outbound composing
+    // desync: the IME's view of the text has drifted past ours (e.g. an edit
+    // shortened a node while a composition was active). Upstream throws here,
+    // which crashes delta application and freezes input. Instead, clamp to the
+    // nearest valid document position — the edit lands slightly off but the
+    // editor stays alive and the next serialization re-syncs the IME — and
+    // report it so we can root-cause.
+    return _clampImeToDocumentPosition(imePosition);
   }
+
+  /// Pancake fork addition. Maps an out-of-range IME position to the nearest
+  /// valid [DocumentPosition] instead of throwing. See [_imeToDocumentPosition].
+  DocumentPosition _clampImeToDocumentPosition(TextPosition imePosition) {
+    final ranges = imeRangesToDocTextNodes.keys.toList();
+    if (ranges.isEmpty) {
+      // No serialized content at all — nothing to clamp to. This shouldn't
+      // happen (a send requires a selection, which serializes ≥1 node), but
+      // preserve the loud failure rather than invent a position.
+      throw Exception(
+          "Couldn't map an IME position to a document position (no serialized ranges). IME position: $imePosition");
+    }
+
+    // Ranges are stored in document order. Pick the one closest to the offset.
+    TextRange nearest = ranges.first;
+    int nearestDistance = _distanceToRange(imePosition.offset, nearest);
+    for (final range in ranges) {
+      final distance = _distanceToRange(imePosition.offset, range);
+      if (distance < nearestDistance) {
+        nearest = range;
+        nearestDistance = distance;
+      }
+    }
+
+    final clampedOffset = imePosition.offset.clamp(nearest.start, nearest.end);
+    final node = _doc.getNodeById(imeRangesToDocTextNodes[nearest]!)!;
+
+    reportImePositionDesync(
+      document: _doc,
+      selection: selection,
+      composingRegion: composingRegion,
+      imeOffset: imePosition.offset,
+      clampedImeOffset: clampedOffset,
+      imeTextLength: imeText.length,
+      nodeId: node.id,
+      onReport: onImePositionUnmappable,
+    );
+
+    if (node is TextNode) {
+      return DocumentPosition(
+        nodeId: node.id,
+        nodePosition: TextNodePosition(offset: clampedOffset - nearest.start),
+      );
+    }
+    return DocumentPosition(
+      nodeId: node.id,
+      nodePosition: clampedOffset <= nearest.start ? node.beginningPosition : node.endPosition,
+    );
+  }
+
+  int _distanceToRange(int offset, TextRange range) {
+    if (offset < range.start) return range.start - offset;
+    if (offset > range.end) return offset - range.end;
+    return 0;
+  }
+
+  /// Pancake fork addition.
+  ///
+  /// Invoked when an inbound IME position can't be mapped into the current
+  /// document and is clamped to the nearest valid position (see
+  /// [_imeToDocumentPosition]). Set once at app startup to forward to telemetry.
+  /// The serializer recovers regardless of whether this is set.
+  static void Function(ImePositionDesync desync)? onImePositionUnmappable;
 
   TextSelection documentToImeSelection(DocumentSelection docSelection) {
     editorImeLog.fine("Converting doc selection to ime selection: $docSelection");
@@ -379,7 +434,7 @@ class DocumentImeSerializer {
     editorImeLog.fine("Text:\n'$imeText'");
     final imeSelection = documentToImeSelection(selection);
     editorImeLog.fine("Selection: $imeSelection");
-    final imeComposingRegion = documentToImeRange(composingRegion);
+    final imeComposingRegion = _safeImeComposingRange();
     editorImeLog.fine("Composing region: $imeComposingRegion");
 
     return TextEditingValue(
@@ -388,6 +443,94 @@ class DocumentImeSerializer {
       composing: imeComposingRegion,
     );
   }
+
+  /// Pancake fork addition.
+  ///
+  /// Maps [composingRegion] to an IME [TextRange] defensively.
+  ///
+  /// The upstream path calls [documentToImeRange] directly, which has two ways
+  /// to produce a [TextEditingValue] the platform rejects:
+  ///
+  ///  1. it throws ("No such document position in the IME content") when the
+  ///     composing region sits on a node that isn't part of the serialized
+  ///     selection;
+  ///  2. it emits `imeRange.start + offset` with no bounds check, so a region
+  ///     whose offset exceeds the (now shorter) node text yields a range past
+  ///     the end of [imeText].
+  ///
+  /// Either case desyncs the document from the IME. Because the editor never
+  /// recovers a valid editing value, the platform stops accepting edits and the
+  /// text field appears frozen. This happens, rarely, when an edit shortens a
+  /// node while an IME composition is still active (e.g. Vietnamese / CJK
+  /// input racing a content-collapsing reaction).
+  ///
+  /// Rather than crash/freeze, we drop a bad composing region to "none" (the
+  /// IME re-establishes one on the next delta) and report it via
+  /// [onComposingRegionDesync] so the host app can log it and/or clear the
+  /// stale composing region to stop it recurring.
+  TextRange _safeImeComposingRange() {
+    final region = composingRegion;
+    if (region == null) return TextRange.empty;
+
+    TextRange range;
+    try {
+      range = documentToImeRange(region);
+    } catch (error, stackTrace) {
+      _droppedComposingRegion = true;
+      reportComposingRegionDesync(
+        document: _doc,
+        selection: selection,
+        composingRegion: region,
+        imeTextLength: imeText.length,
+        cause: error,
+        stackTrace: stackTrace,
+        onReport: onComposingRegionDesync,
+      );
+      return TextRange.empty;
+    }
+
+    // An invalid (-1) range is super_editor's own "no composing region" value
+    // and is safe to forward as-is. Anything else must fall within [imeText].
+    final isNoRegion = range.start < 0 && range.end < 0;
+    final isInBounds = range.start >= 0 && range.end >= range.start && range.end <= imeText.length;
+    if (!isNoRegion && !isInBounds) {
+      _droppedComposingRegion = true;
+      reportComposingRegionDesync(
+        document: _doc,
+        selection: selection,
+        composingRegion: region,
+        imeTextLength: imeText.length,
+        cause: 'composing region out of range: $range (imeText length ${imeText.length})',
+        stackTrace: StackTrace.current,
+        onReport: onComposingRegionDesync,
+      );
+      return TextRange.empty;
+    }
+
+    return range;
+  }
+
+  /// Pancake fork addition.
+  ///
+  /// Whether [toTextEditingValue] had to discard an invalid composing region.
+  /// The IME communication layer reads this to schedule a recovery that clears
+  /// the stale composing region from the composer, so the desync doesn't repeat
+  /// on every subsequent frame.
+  bool get didDropComposingRegion => _droppedComposingRegion;
+  bool _droppedComposingRegion = false;
+
+  /// Pancake fork addition.
+  ///
+  /// Invoked whenever [toTextEditingValue] has to discard an invalid IME
+  /// composing region (see [_safeImeComposingRange]). Set this once at app
+  /// startup to forward the event to telemetry and, optionally, to clear the
+  /// stale composing region (e.g. dispatch a `ClearComposingRegionRequest`) so
+  /// the desync doesn't repeat on every subsequent frame.
+  ///
+  /// The serializer always self-heals regardless of whether this is set; the
+  /// hook only adds observability and an opportunity for the host to recover
+  /// the stored composer state.
+  static void Function(ImeComposingRegionDesync desync)? onComposingRegionDesync;
 }
 
 enum PrependedCharacterPolicy {
