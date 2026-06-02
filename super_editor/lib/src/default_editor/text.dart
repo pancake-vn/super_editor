@@ -1291,6 +1291,16 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
           _textStyleWithBlockType,
           widget.inlineWidgetBuilders,
         ),
+        // Pin the line height to the paragraph's base style so an inline
+        // placeholder (e.g. a mention chip) that is the last span on the line
+        // cannot inflate it via `applyHeightToLastDescent`. Without this, a line
+        // ending in a WidgetSpan renders ~1px taller than the same line followed
+        // by a glyph, so the line visibly shifts when text is typed after a
+        // mention.
+        strutStyle: StrutStyle.fromTextStyle(
+          _textStyleWithBlockType(const {}),
+          forceStrutHeight: true,
+        ),
         textAlign: widget.textAlign ?? TextAlign.left,
         textDirection: widget.textDirection ?? TextDirection.ltr,
         textScaler: widget.textScaler ?? MediaQuery.textScalerOf(context),

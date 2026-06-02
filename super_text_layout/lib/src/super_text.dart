@@ -30,6 +30,7 @@ class SuperText extends StatefulWidget {
     this.textScaler,
     this.maxLines,
     this.overflow = TextOverflow.clip,
+    this.strutStyle,
     this.layerBeneathBuilder,
     this.layerAboveBuilder,
     this.debugTrackTextBuilds = false,
@@ -55,6 +56,14 @@ class SuperText extends StatefulWidget {
 
   /// The effect used when text exceeds the available space, e.g., clip, ellipsis, fade, show.
   final TextOverflow overflow;
+
+  /// The strut style to use for vertical line layout.
+  ///
+  /// When set with `forceStrutHeight: true`, the line height is pinned to the
+  /// strut regardless of inline content, so an inline [WidgetSpan] (e.g. a
+  /// mention chip) that is the last span on a line can't inflate the line via
+  /// `applyHeightToLastDescent`. Defaults to null (Flutter's default behavior).
+  final StrutStyle? strutStyle;
 
   /// Builds a widget that appears beneath the text, e.g., to render text
   /// selection boxes.
@@ -103,6 +112,7 @@ class SuperTextState extends ProseTextState<SuperText> with ProseTextBlock {
         textScaler: widget.textScaler ?? MediaQuery.textScalerOf(context),
         maxLines: widget.maxLines,
         overflow: widget.overflow,
+        strutStyle: widget.strutStyle,
         onMarkNeedsLayout: _invalidateParagraph,
       ),
       background: LayoutBuilder(
@@ -311,6 +321,7 @@ class LayoutAwareRichText extends RichText {
     super.textScaler = TextScaler.noScaling,
     super.maxLines,
     super.overflow,
+    super.strutStyle,
     required this.onMarkNeedsLayout,
   });
 
