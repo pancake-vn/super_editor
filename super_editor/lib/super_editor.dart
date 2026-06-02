@@ -12,6 +12,7 @@ export 'src/core/document_layout.dart';
 export 'src/core/document_selection.dart';
 export 'src/core/edit_context.dart';
 export 'src/core/editor.dart';
+export 'src/core/editor_telemetry.dart';
 export 'src/core/styles.dart';
 
 // Chat

@@ -3,6 +3,7 @@ import 'package:super_editor/src/core/document.dart';
 import 'package:super_editor/src/core/document_composer.dart';
 import 'package:super_editor/src/core/document_selection.dart';
 import 'package:super_editor/src/core/editor.dart';
+import 'package:super_editor/src/core/editor_telemetry.dart';
 import 'package:super_editor/src/default_editor/attributions.dart';
 import 'package:super_editor/src/default_editor/multi_node_editing.dart';
 import 'package:super_editor/src/default_editor/super_editor.dart';
@@ -111,7 +112,7 @@ class MarkdownInlineUpstreamSyntaxReaction extends EditReaction {
       return;
     }
 
-    final editRequests = _applyInlineMarkdownBeforeCaret(document, extent);
+    final editRequests = _applyInlineMarkdownBeforeCaret(document, extent, requestDispatcher);
     if (editRequests.isEmpty) {
       // No inline Markdown was applied. Fizzle.
       return;
@@ -144,9 +145,32 @@ class MarkdownInlineUpstreamSyntaxReaction extends EditReaction {
     return editedTextNodes;
   }
 
+  /// Maps the attributions present on a converted run to stable, snake-case
+  /// format names for telemetry. Derived from the styled output so it tracks
+  /// whatever the parsers actually applied.
+  Set<String> _markdownFormatsOf(AttributedText text) {
+    final formats = <String>{};
+    for (final span in text.getAttributionSpansByFilter((_) => true)) {
+      final attribution = span.attribution;
+      if (attribution == boldAttribution) {
+        formats.add('bold');
+      } else if (attribution == italicsAttribution) {
+        formats.add('italic');
+      } else if (attribution == strikethroughAttribution) {
+        formats.add('strikethrough');
+      } else if (attribution == codeAttribution) {
+        formats.add('code');
+      } else if (attribution is LinkAttribution) {
+        formats.add('link');
+      }
+    }
+    return formats;
+  }
+
   List<EditRequest> _applyInlineMarkdownBeforeCaret(
     Document document,
     DocumentPosition caretPosition,
+    RequestDispatcher requestDispatcher,
   ) {
     final editedNode = document.getNodeById(caretPosition.nodeId) as TextNode;
     final caretOffset = (caretPosition.nodePosition as TextNodePosition).offset;
@@ -159,6 +183,15 @@ class MarkdownInlineUpstreamSyntaxReaction extends EditReaction {
     final markdownRun = inlineParser.findMarkdown();
     if (markdownRun == null) {
       return const [];
+    }
+
+    // Report each style the run applied as a markdown-shorthand formatting
+    // event. Derived from the styled replacement text so it stays correct as
+    // parsers evolve, rather than re-detecting syntax.
+    for (final format in _markdownFormatsOf(markdownRun.replacementText)) {
+      requestDispatcher.emitTelemetry(
+        FormattingAppliedEvent(format: format, trigger: EditorFormattingTrigger.markdownShorthand),
+      );
     }
 
     final newCaretPosition = DocumentPosition(

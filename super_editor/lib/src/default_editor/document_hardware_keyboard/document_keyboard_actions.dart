@@ -8,6 +8,7 @@ import 'package:super_editor/src/core/document_composer.dart';
 import 'package:super_editor/src/core/document_layout.dart';
 import 'package:super_editor/src/core/document_selection.dart';
 import 'package:super_editor/src/core/edit_context.dart';
+import 'package:super_editor/src/core/editor_telemetry.dart';
 import 'package:super_editor/src/default_editor/attributions.dart';
 import 'package:super_editor/src/default_editor/paragraph.dart';
 import 'package:super_editor/src/default_editor/text.dart';
@@ -330,6 +331,14 @@ ExecutionInstruction cmdBToToggleBold({
     return ExecutionInstruction.continueExecution;
   }
 
+  // Emit once per press (not on auto-repeat) so telemetry counts intent, not
+  // key-repeat frequency.
+  if (keyEvent is KeyDownEvent) {
+    editContext.editor.emitTelemetry(
+      const FormattingAppliedEvent(format: 'bold', trigger: EditorFormattingTrigger.keyboardShortcut),
+    );
+  }
+
   if (editContext.composer.selection!.isCollapsed) {
     editContext.commonOps.toggleComposerAttributions({boldAttribution});
     return ExecutionInstruction.haltExecution;
@@ -349,6 +358,12 @@ ExecutionInstruction cmdIToToggleItalics({
 
   if (!keyEvent.isPrimaryShortcutKeyPressed || keyEvent.logicalKey != LogicalKeyboardKey.keyI) {
     return ExecutionInstruction.continueExecution;
+  }
+
+  if (keyEvent is KeyDownEvent) {
+    editContext.editor.emitTelemetry(
+      const FormattingAppliedEvent(format: 'italic', trigger: EditorFormattingTrigger.keyboardShortcut),
+    );
   }
 
   if (editContext.composer.selection!.isCollapsed) {

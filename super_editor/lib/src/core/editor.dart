@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:attributed_text/attributed_text.dart';
@@ -6,6 +7,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:super_editor/src/core/document.dart';
 import 'package:super_editor/src/core/document_composer.dart';
+import 'package:super_editor/src/core/editor_telemetry.dart';
 import 'package:super_editor/src/default_editor/paragraph.dart';
 import 'package:super_editor/src/default_editor/text.dart';
 import 'package:super_editor/src/infrastructure/_logging.dart';
@@ -69,6 +71,27 @@ class Editor implements RequestDispatcher {
   void dispose() {
     reactionPipeline.clear();
     _changeListeners.clear();
+    _telemetryController.close();
+  }
+
+  /// A broadcast stream of [EditorTelemetryEvent]s describing notable editor
+  /// activity (e.g. a format applied via keyboard shortcut or markdown).
+  ///
+  /// super_editor itself never records analytics — it only surfaces these
+  /// events. A consumer listens and decides what, if anything, to report. Both
+  /// built-in editor behaviors and [SuperEditorPlugin]s emit onto this stream
+  /// via [emitTelemetry].
+  Stream<EditorTelemetryEvent> get telemetry => _telemetryController.stream;
+  final StreamController<EditorTelemetryEvent> _telemetryController = StreamController<EditorTelemetryEvent>.broadcast();
+
+  /// Emits [event] on the [telemetry] stream. No-op once the editor is disposed.
+  ///
+  /// Cheap when nothing is listening — the broadcast controller simply drops the
+  /// event — so callers don't need to guard on listener presence.
+  @override
+  void emitTelemetry(EditorTelemetryEvent event) {
+    if (_telemetryController.isClosed) return;
+    _telemetryController.add(event);
   }
 
   /// Chain of Responsibility that maps a given [EditRequest] to an [EditCommand].
@@ -791,6 +814,13 @@ abstract mixin class Editable {
 abstract class RequestDispatcher {
   /// Pushes the given [requests] through a [Editor] pipeline.
   void execute(List<EditRequest> requests);
+
+  /// Emits [event] on the editor's telemetry stream (see [Editor.telemetry]).
+  ///
+  /// Exposed here so [EditReaction]s — which receive a [RequestDispatcher], not
+  /// the concrete [Editor] — can report notable activity (e.g. a markdown
+  /// shorthand conversion) without depending on the editor's internals.
+  void emitTelemetry(EditorTelemetryEvent event);
 }
 
 /// A command that alters something in a [Editor].

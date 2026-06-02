@@ -10,6 +10,7 @@ import 'package:super_editor/src/core/document.dart';
 import 'package:super_editor/src/core/document_composer.dart';
 import 'package:super_editor/src/core/document_selection.dart';
 import 'package:super_editor/src/core/editor.dart';
+import 'package:super_editor/src/core/editor_telemetry.dart';
 import 'package:super_editor/src/default_editor/attributions.dart';
 import 'package:super_editor/src/default_editor/horizontal_rule.dart';
 import 'package:super_editor/src/default_editor/image.dart';
@@ -135,6 +136,9 @@ class UnorderedListItemConversionReaction extends ParagraphPrefixConversionReact
   ) {
     // The user started a paragraph with an unordered list item pattern.
     // Convert the paragraph to an unordered list item.
+    requestDispatcher.emitTelemetry(
+      const FormattingAppliedEvent(format: 'bullet_list', trigger: EditorFormattingTrigger.markdownShorthand),
+    );
     requestDispatcher.execute([
       ReplaceNodeRequest(
         existingNodeId: paragraph.id,
@@ -207,6 +211,9 @@ class OrderedListItemConversionReaction extends ParagraphPrefixConversionReactio
 
     // The user started a paragraph with an ordered list item pattern.
     // Convert the paragraph to an unordered list item.
+    requestDispatcher.emitTelemetry(
+      const FormattingAppliedEvent(format: 'numbered_list', trigger: EditorFormattingTrigger.markdownShorthand),
+    );
     requestDispatcher.execute([
       ReplaceNodeRequest(
         existingNodeId: paragraph.id,
@@ -249,6 +256,9 @@ class BlockquoteConversionReaction extends ParagraphPrefixConversionReaction {
   ) {
     // The user started a paragraph with blockquote pattern.
     // Convert the paragraph to a blockquote.
+    requestDispatcher.emitTelemetry(
+      const FormattingAppliedEvent(format: 'blockquote', trigger: EditorFormattingTrigger.markdownShorthand),
+    );
     requestDispatcher.execute([
       ReplaceNodeRequest(
         existingNodeId: paragraph.id,
