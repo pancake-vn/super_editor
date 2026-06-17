@@ -229,6 +229,16 @@ class CommonEditorOperations {
         SelectionChangeType.expandSelection,
         SelectionReason.userInteraction,
       ),
+      // Pancake fork: commit any in-flight IME composition before the selection
+      // expands past it. This fixes this bug:
+      // 1. User types something and compossing region is active
+      // 2. User selects all text with Cmd(Ctrl) + A
+      // 3. User backspaces to delete the selected text
+      // 4. Instead of deleting the selected text, it deletes a single composing char
+      //
+      // This is because while the composing region is active, it owns the input key
+      // events.
+      const ClearComposingRegionRequest(),
     ]);
 
     return true;
