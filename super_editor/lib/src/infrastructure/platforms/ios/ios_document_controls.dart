@@ -502,6 +502,7 @@ class IosHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
     required this.handleColor,
     this.caretWidth = 2,
     this.handleBallDiameter = defaultIosHandleBallDiameter,
+    this.handleBallShadow,
     required this.shouldCaretBlink,
     this.floatingCursorController,
     this.showDebugPaint = false,
@@ -531,6 +532,9 @@ class IosHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
   /// The diameter of the small circle that appears on the top and bottom of
   /// expanded iOS text handles.
   final double handleBallDiameter;
+
+  /// Optional drop shadow cast by the ball on the expanded handles.
+  final List<BoxShadow>? handleBallShadow;
 
   /// Whether the caret should blink, whenever the caret is visible.
   final ValueListenable<bool> shouldCaretBlink;
@@ -903,6 +907,7 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
           caretHeight: upstream.height + (selectionHighlightBoxVerticalExpansion * 2) - (ballRadius / 2),
           caretWidth: widget.caretWidth,
           ballRadius: ballRadius,
+          ballShadow: widget.handleBallShadow,
         ),
       ),
     );
@@ -929,6 +934,7 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
           caretHeight: downstream.height + (selectionHighlightBoxVerticalExpansion * 2) - (ballRadius / 2),
           caretWidth: widget.caretWidth,
           ballRadius: ballRadius,
+          ballShadow: widget.handleBallShadow,
         ),
       ),
     );

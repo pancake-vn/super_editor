@@ -28,6 +28,7 @@ class IOSSelectionHandle extends StatelessWidget {
     required this.caretHeight,
     this.caretWidth = 2,
     this.ballRadius = 4,
+    this.ballShadow,
     this.handleType = HandleType.upstream,
   }) : super(key: key);
 
@@ -37,11 +38,15 @@ class IOSSelectionHandle extends StatelessWidget {
     required this.caretHeight,
     this.caretWidth = 2,
     this.ballRadius = 4,
+    this.ballShadow,
     this.handleType = HandleType.downstream,
   }) : super(key: key);
 
   /// The color of the caret and ball in the handle.
   final Color color;
+
+  /// Optional drop shadow cast by the ball.
+  final List<BoxShadow>? ballShadow;
 
   /// The height of the caret, excluding the ball.
   final double caretHeight;
@@ -68,37 +73,32 @@ class IOSSelectionHandle extends StatelessWidget {
   }
 
   Widget _buildExpandedHandle() {
-    final ballDiameter = ballRadius * 2;
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         // Show the ball on the top for an upstream handle
-        if (handleType == HandleType.upstream)
-          Container(
-            width: ballDiameter,
-            height: ballDiameter,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-            ),
-          ),
+        if (handleType == HandleType.upstream) _buildBall(),
         Container(
           width: caretWidth,
           height: caretHeight,
           color: color,
         ),
         // Show the ball on the bottom for a downstream handle
-        if (handleType == HandleType.downstream)
-          Container(
-            width: ballDiameter,
-            height: ballDiameter,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-            ),
-          ),
+        if (handleType == HandleType.downstream) _buildBall(),
       ],
+    );
+  }
+
+  Widget _buildBall() {
+    final ballDiameter = ballRadius * 2;
+    return Container(
+      width: ballDiameter,
+      height: ballDiameter,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        boxShadow: ballShadow,
+      ),
     );
   }
 }

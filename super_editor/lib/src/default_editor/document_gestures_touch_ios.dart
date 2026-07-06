@@ -1044,11 +1044,44 @@ class _IosDocumentTouchInteractorState extends State<IosDocumentTouchInteractor>
     _placeFocalPointNearTouchOffset();
   }
 
+  /// Clamps [documentOffset]'s vertical position to the document's content
+  /// bounds, so dragging a handle above the first line or below the last line
+  /// projects onto the nearest line (preserving x) instead of snapping to the
+  /// document's absolute start/end. Matches native text selection.
+  Offset _clampOffsetToDocumentBounds(Offset documentOffset) {
+    final firstNode = widget.document.firstOrNull;
+    final lastNode = widget.document.lastOrNull;
+    if (firstNode == null || lastNode == null) {
+      return documentOffset;
+    }
+
+    final topRect = _docLayout.getRectForPosition(
+      DocumentPosition(nodeId: firstNode.id, nodePosition: firstNode.beginningPosition),
+    );
+    final bottomRect = _docLayout.getRectForPosition(
+      DocumentPosition(nodeId: lastNode.id, nodePosition: lastNode.endPosition),
+    );
+    if (topRect == null || bottomRect == null) {
+      return documentOffset;
+    }
+
+    // Project onto the first/last line's vertical center — a stable spot for
+    // horizontal hit-testing. Offsets already within the content are untouched.
+    if (documentOffset.dy < topRect.top) {
+      return Offset(documentOffset.dx, topRect.center.dy);
+    }
+    if (documentOffset.dy > bottomRect.bottom) {
+      return Offset(documentOffset.dx, bottomRect.center.dy);
+    }
+    return documentOffset;
+  }
+
   void _updateSelectionForNewDragHandleLocation() {
     final docDragDelta = _globalDragOffset! - _globalStartDragOffset!;
     final dragScrollDelta = _dragStartScrollOffset! - scrollPosition.pixels;
-    final docDragPosition = _docLayout
-        .getDocumentPositionNearestToOffset(_startDragPositionOffset! + docDragDelta - Offset(0, dragScrollDelta));
+    final docDragPosition = _docLayout.getDocumentPositionNearestToOffset(
+      _clampOffsetToDocumentBounds(_startDragPositionOffset! + docDragDelta - Offset(0, dragScrollDelta)),
+    );
     if (docDragPosition == null) {
       return;
     }
@@ -1981,6 +2014,7 @@ class SuperEditorIosHandlesDocumentLayerBuilder implements SuperEditorLayerBuild
     this.handleColor,
     this.caretWidth,
     this.handleBallDiameter,
+    this.handleBallShadow,
   });
 
   final Color? handleColor;
@@ -1989,6 +2023,9 @@ class SuperEditorIosHandlesDocumentLayerBuilder implements SuperEditorLayerBuild
   /// The diameter of the small circle that appears on the top and bottom of
   /// expanded iOS text handles.
   final double? handleBallDiameter;
+
+  /// Optional drop shadow cast by the ball on the expanded handles.
+  final List<BoxShadow>? handleBallShadow;
 
   @override
   ContentLayerWidget build(BuildContext context, SuperEditorContext editContext) {
@@ -2015,6 +2052,7 @@ class SuperEditorIosHandlesDocumentLayerBuilder implements SuperEditorLayerBuild
       handleColor: handleColor ?? controlsController.handleColor ?? Theme.of(context).primaryColor,
       caretWidth: caretWidth ?? 2,
       handleBallDiameter: handleBallDiameter ?? defaultIosHandleBallDiameter,
+      handleBallShadow: handleBallShadow,
       shouldCaretBlink: controlsController.shouldCaretBlink,
       floatingCursorController: controlsController.floatingCursorController,
     );
