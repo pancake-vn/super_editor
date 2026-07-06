@@ -17,11 +17,14 @@ import 'package:super_editor/src/infrastructure/touch_controls.dart';
 class AndroidSelectionHandle extends StatelessWidget {
   static const defaultTouchRegionExpansion = EdgeInsets.only(left: 16, right: 16, bottom: 16);
 
+  /// Default [radius] of an Android drag handle.
+  static const defaultRadius = 10.0;
+
   const AndroidSelectionHandle({
     Key? key,
     required this.handleType,
     required this.color,
-    this.radius = 10,
+    this.radius = defaultRadius,
     this.touchRegionExpansion = defaultTouchRegionExpansion,
     this.showDebugTouchRegion = false,
   }) : super(key: key);

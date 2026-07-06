@@ -118,6 +118,7 @@ class SuperEditorAndroidControlsScope extends InheritedWidget {
 class SuperEditorAndroidControlsController {
   SuperEditorAndroidControlsController({
     this.controlsColor,
+    this.handleRadius,
     LeaderLink? collapsedHandleFocalPoint,
     this.collapsedHandleBuilder,
     LeaderLink? upstreamHandleFocalPoint,
@@ -165,6 +166,13 @@ class SuperEditorAndroidControlsController {
   /// The default handle builders honor this color. If custom handle builders are
   /// provided, its up to those handle builders to honor this color, or not.
   final Color? controlsColor;
+
+  /// Radius of the Android drag handles (each handle is a circle with one pointy
+  /// corner). When `null`, the default [AndroidSelectionHandle] radius is used.
+  ///
+  /// The default handle builders honor this radius. If custom handle builders
+  /// are provided, it's up to them to honor it, or not.
+  final double? handleRadius;
 
   /// The focal point for the collapsed drag handle.
   ///
@@ -1831,6 +1839,7 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
                     key: DocumentKeys.androidCaretHandle,
                     handleType: HandleType.collapsed,
                     color: _controlsController!.controlsColor ?? Theme.of(context).primaryColor,
+                    radius: _controlsController!.handleRadius ?? AndroidSelectionHandle.defaultRadius,
                   ),
                 ),
               ),
@@ -1901,6 +1910,7 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
                 key: DocumentKeys.upstreamHandle,
                 handleType: HandleType.upstream,
                 color: _controlsController!.controlsColor ?? Theme.of(context).primaryColor,
+                radius: _controlsController!.handleRadius ?? AndroidSelectionHandle.defaultRadius,
               ),
             ),
           );
@@ -1944,6 +1954,7 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
                 key: DocumentKeys.downstreamHandle,
                 handleType: HandleType.downstream,
                 color: _controlsController!.controlsColor ?? Theme.of(context).primaryColor,
+                radius: _controlsController!.handleRadius ?? AndroidSelectionHandle.defaultRadius,
               ),
             ),
           );
