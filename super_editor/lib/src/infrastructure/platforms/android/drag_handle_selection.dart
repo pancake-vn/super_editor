@@ -99,15 +99,32 @@ class AndroidTextFieldDragHandleSelectionStrategy {
   void onHandlePanUpdate(DragUpdateDetails details) {
     _currentFocalPoint = _currentFocalPoint! + details.delta;
 
-    final nearestPosition = _docLayout.getDocumentPositionNearestToOffset(
+    // Clamp the query vertically into the document's content bounds. Without
+    // this, dragging above the first line or below the last line makes
+    // [DocumentLayout.getDocumentPositionNearestToOffset] snap to the document's
+    // absolute start/end and ignore the horizontal position. Clamping the
+    // vertical position onto the nearest line preserves x, so dragging in the
+    // padding above/below the text still tracks the caret horizontally —
+    // matching native text selection.
+    final documentOffset = _clampToDocumentBounds(
       _docLayout.getDocumentOffsetFromAncestorOffset(_currentFocalPoint!),
     );
+    final nearestPosition = _docLayout.getDocumentPositionNearestToOffset(documentOffset);
     if (nearestPosition == null) {
+      return;
+    }
+
+    // Holding the finger still (with natural jitter) shouldn't re-run the
+    // selection logic. Re-running it flips the drag direction back and forth,
+    // which toggles word-vs-character selection and makes the selection jump.
+    // Skip when the nearest position hasn't changed.
+    if (nearestPosition == _lastFocalPosition) {
       return;
     }
 
     if (_dragHandleType == HandleType.collapsed) {
       // A collapsed handle always produces a collapsed selection.
+      _lastFocalPosition = nearestPosition;
       _lastSelection = DocumentSelection.collapsed(position: nearestPosition);
       _select(_lastSelection!);
       return;
@@ -194,6 +211,12 @@ class AndroidTextFieldDragHandleSelectionStrategy {
       }
     }
 
+    // Force character-precise selection. super_editor otherwise mimics Android's
+    // word-snapping (dragging a handle outward expands by whole words), which
+    // felt unnatural here — a 1px drag could jump the selection by a word.
+    // Selecting by character keeps handle dragging precise and predictable.
+    _selectionModifier = _SelectionModifier.character;
+
     final rangeToExpandSelection = _selectionModifier == _SelectionModifier.word
         ? _dragHandleType == _effectiveDragHandleType
             ? getWordSelection(docPosition: nearestPosition, docLayout: _docLayout)
@@ -207,6 +230,40 @@ class AndroidTextFieldDragHandleSelectionStrategy {
       );
       _select(_lastSelection!);
     }
+  }
+
+  /// Clamps [documentOffset]'s vertical position to the document's content
+  /// bounds, so an offset above the first line or below the last line projects
+  /// onto the nearest line (preserving x) instead of snapping to the document's
+  /// absolute start/end.
+  Offset _clampToDocumentBounds(Offset documentOffset) {
+    final firstNode = _document.firstOrNull;
+    final lastNode = _document.lastOrNull;
+    if (firstNode == null || lastNode == null) {
+      return documentOffset;
+    }
+
+    final topRect = _docLayout.getRectForPosition(
+      DocumentPosition(nodeId: firstNode.id, nodePosition: firstNode.beginningPosition),
+    );
+    final bottomRect = _docLayout.getRectForPosition(
+      DocumentPosition(nodeId: lastNode.id, nodePosition: lastNode.endPosition),
+    );
+    if (topRect == null || bottomRect == null) {
+      return documentOffset;
+    }
+
+    // Above the first line or below the last line, project the query onto that
+    // line's vertical center — a stable spot for horizontal hit-testing (the
+    // line's top/bottom edges make the nearest character flicker). Offsets
+    // already within the content are left untouched.
+    if (documentOffset.dy < topRect.top) {
+      return Offset(documentOffset.dx, topRect.center.dy);
+    }
+    if (documentOffset.dy > bottomRect.bottom) {
+      return Offset(documentOffset.dx, bottomRect.center.dy);
+    }
+    return documentOffset;
   }
 
   /// Invert the selection so that the base and extent are swapped.
