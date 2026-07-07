@@ -18,6 +18,7 @@ import 'package:super_editor/src/default_editor/text_tools.dart';
 import 'package:super_editor/src/document_operations/selection_operations.dart';
 import 'package:super_editor/src/infrastructure/_logging.dart';
 import 'package:super_editor/src/infrastructure/content_layers.dart';
+import 'package:super_editor/src/infrastructure/inset_follower_boundary.dart';
 import 'package:super_editor/src/infrastructure/flutter/build_context.dart';
 import 'package:super_editor/src/infrastructure/flutter/eager_pan_gesture_recognizer.dart';
 import 'package:super_editor/src/infrastructure/flutter/empty_box.dart';
@@ -127,6 +128,8 @@ class SuperEditorAndroidControlsController {
     this.magnifierBuilder,
     this.toolbarBuilder,
     this.createOverlayControlsClipper,
+    this.toolbarBoundaryPadding = EdgeInsets.zero,
+    this.toolbarDistanceFromSelection = 20,
   })  : collapsedHandleFocalPoint = collapsedHandleFocalPoint ?? LeaderLink(),
         upstreamHandleFocalPoint = upstreamHandleFocalPoint ?? LeaderLink(),
         downstreamHandleFocalPoint = downstreamHandleFocalPoint ?? LeaderLink();
@@ -353,6 +356,20 @@ class SuperEditorAndroidControlsController {
   /// will be allowed to appear anywhere in the overlay in which they sit
   /// (probably the entire screen).
   final CustomClipper<Rect> Function(BuildContext overlayContext)? createOverlayControlsClipper;
+
+  /// Padding subtracted from the toolbar's positioning boundary on each side.
+  ///
+  /// The floating toolbar is clamped to stay within the screen. Since it's
+  /// horizontally centered on the selection focal point, a selection near the
+  /// screen edge would otherwise push the toolbar flush against that edge. This
+  /// padding keeps it that distance away from the boundary edges.
+  final EdgeInsets toolbarBoundaryPadding;
+
+  /// Vertical gap between the selection and the toolbar when the toolbar sits
+  /// above the selection (the common case).
+  ///
+  /// Passed to the toolbar aligner as its "above" offset.
+  final double toolbarDistanceFromSelection;
 }
 
 /// A [SuperEditorDocumentLayerBuilder] that builds an [AndroidToolbarFocalPointDocumentLayer], which
@@ -1455,7 +1472,7 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
     _controlsController = SuperEditorAndroidControlsScope.rootOf(context);
     // TODO: Replace CupertinoPopoverToolbarAligner aligner with a generic aligner because this code runs on Android.
     _toolbarAligner = CupertinoPopoverToolbarAligner(
-      toolbarVerticalOffsetAbove: 20,
+      toolbarVerticalOffsetAbove: _controlsController!.toolbarDistanceFromSelection,
       toolbarVerticalOffsetBelow: 90,
     );
   }
@@ -1972,7 +1989,10 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
       child: Follower.withAligner(
         link: _controlsController!.toolbarFocalPoint,
         aligner: _toolbarAligner,
-        boundary: const ScreenFollowerBoundary(),
+        boundary: InsetFollowerBoundary(
+          boundary: const ScreenFollowerBoundary(),
+          padding: _controlsController!.toolbarBoundaryPadding,
+        ),
         child: _toolbarBuilder(context, DocumentKeys.mobileToolbar, _controlsController!.toolbarFocalPoint),
       ),
     );

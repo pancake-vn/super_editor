@@ -10,6 +10,7 @@ import 'package:super_editor/src/core/document_selection.dart';
 import 'package:super_editor/src/default_editor/document_gestures_touch_ios.dart';
 import 'package:super_editor/src/infrastructure/_logging.dart';
 import 'package:super_editor/src/infrastructure/content_layers.dart';
+import 'package:super_editor/src/infrastructure/inset_follower_boundary.dart';
 import 'package:super_editor/src/infrastructure/documents/document_layers.dart';
 import 'package:super_editor/src/infrastructure/documents/selection_leader_document_layer.dart';
 import 'package:super_editor/src/infrastructure/flutter/flutter_scheduler.dart';
@@ -28,6 +29,8 @@ class IosFloatingToolbarOverlay extends StatefulWidget {
     required this.toolbarFocalPoint,
     required this.floatingToolbarBuilder,
     this.createOverlayControlsClipper,
+    this.boundaryPadding = EdgeInsets.zero,
+    this.verticalOffsetAbove = 20,
     this.showDebugPaint = false,
   }) : super(key: key);
 
@@ -54,6 +57,14 @@ class IosFloatingToolbarOverlay extends StatefulWidget {
   ///
   /// Typically, this bar includes actions like "copy", "cut", "paste", etc.
   final DocumentFloatingToolbarBuilder floatingToolbarBuilder;
+
+  /// Padding subtracted from the toolbar's positioning boundary on each side,
+  /// keeping the toolbar that distance away from the overlay edges.
+  final EdgeInsets boundaryPadding;
+
+  /// Vertical gap between the selection and the toolbar when it's positioned
+  /// above the selection.
+  final double verticalOffsetAbove;
 
   final bool showDebugPaint;
 
@@ -107,9 +118,10 @@ class _IosFloatingToolbarOverlayState extends State<IosFloatingToolbarOverlay> w
       ),
       child: Follower.withAligner(
         link: widget.toolbarFocalPoint,
-        aligner: CupertinoPopoverToolbarAligner(),
-        boundary: WidgetFollowerBoundary(
-          boundaryKey: _boundsKey,
+        aligner: CupertinoPopoverToolbarAligner(toolbarVerticalOffsetAbove: widget.verticalOffsetAbove),
+        boundary: InsetFollowerBoundary(
+          boundary: WidgetFollowerBoundary(boundaryKey: _boundsKey),
+          padding: widget.boundaryPadding,
         ),
         child: widget.floatingToolbarBuilder(context, DocumentKeys.mobileToolbar, widget.toolbarFocalPoint),
       ),

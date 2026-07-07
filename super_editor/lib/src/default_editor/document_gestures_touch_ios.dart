@@ -123,6 +123,8 @@ class SuperEditorIosControlsController {
     this.magnifierBuilder,
     this.toolbarBuilder,
     this.createOverlayControlsClipper,
+    this.toolbarBoundaryPadding = EdgeInsets.zero,
+    this.toolbarDistanceFromSelection = 20,
   }) : floatingCursorController = floatingCursorController ?? FloatingCursorController();
 
   void dispose() {
@@ -234,6 +236,20 @@ class SuperEditorIosControlsController {
   /// will be allowed to appear anywhere in the overlay in which they sit
   /// (probably the entire screen).
   final CustomClipper<Rect> Function(BuildContext overlayContext)? createOverlayControlsClipper;
+
+  /// Padding subtracted from the toolbar's positioning boundary on each side.
+  ///
+  /// The floating toolbar is clamped to stay within the overlay bounds. Since
+  /// it's horizontally centered on the selection focal point, a selection near
+  /// the screen edge would otherwise push the toolbar flush against that edge.
+  /// This padding keeps it that distance away from the boundary edges.
+  final EdgeInsets toolbarBoundaryPadding;
+
+  /// Vertical gap between the selection and the toolbar when the toolbar sits
+  /// above the selection (the common case).
+  ///
+  /// Passed to the toolbar aligner as its "above" offset.
+  final double toolbarDistanceFromSelection;
 }
 
 /// Document gesture interactor that's designed for iOS touch input, e.g.,
@@ -1584,6 +1600,8 @@ class SuperEditorIosToolbarOverlayManagerState extends State<SuperEditorIosToolb
         floatingToolbarBuilder:
             _controlsController!.toolbarBuilder ?? widget.defaultToolbarBuilder ?? (_, __, ___) => const SizedBox(),
         createOverlayControlsClipper: _controlsController!.createOverlayControlsClipper,
+        boundaryPadding: _controlsController!.toolbarBoundaryPadding,
+        verticalOffsetAbove: _controlsController!.toolbarDistanceFromSelection,
         showDebugPaint: false,
       ),
     );
