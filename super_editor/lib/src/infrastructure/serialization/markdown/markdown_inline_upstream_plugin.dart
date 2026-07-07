@@ -296,10 +296,18 @@ class _UpstreamInlineMarkdownParser {
 
     int offset = caretOffset - 1;
 
+    // The character immediately upstream from the caret is the just-typed
+    // trigger. If it's an inline placeholder (e.g. a mention pill), there's no
+    // Markdown syntax to parse.
+    final caretCharacter = _characterAt(offset);
+    if (caretCharacter == null) {
+      return null;
+    }
+
     // Start visiting upstream characters by visiting the first character
     // and checking for possible syntaxes.
     for (final parser in parsers) {
-      final markdownToken = parser.startWith(attributedText[offset] as String, offset);
+      final markdownToken = parser.startWith(caretCharacter, offset);
       if (markdownToken != null) {
         _possibleSyntaxes.add(markdownToken);
       }
@@ -309,9 +317,17 @@ class _UpstreamInlineMarkdownParser {
     while (offset > 0 && _possibleSyntaxes.isNotEmpty) {
       offset -= 1;
 
+      final upstreamCharacter = _characterAt(offset);
+      if (upstreamCharacter == null) {
+        // Reached an inline placeholder (e.g. a mention pill). Inline Markdown
+        // syntax can't span across a placeholder, so treat it as a hard upstream
+        // boundary — like the start of the text — and stop scanning.
+        break;
+      }
+
       // Update all existing possible syntaxes and remove any possible syntaxes
       // that are now invalid due to the new character.
-      _updatePossibleSyntaxes(attributedText[offset] as String, offset);
+      _updatePossibleSyntaxes(upstreamCharacter, offset);
 
       // Store any successful parsers on a stack. We keep searching after successful
       // parsing because some parsers are essentially supersets of others, e.g., "*"
@@ -332,8 +348,14 @@ class _UpstreamInlineMarkdownParser {
         //
         // Finding a completed syntax isn't enough. We need to ensure that the
         // immediate upstream character before the syntax doesn't invalidate it.
-        final upstreamCharacter = attributedText[offset - 1] as String;
-        successfulParsers.removeWhere((parser) => !parser.canFollowCharacter(upstreamCharacter));
+        final priorCharacter = _characterAt(offset - 1);
+        if (priorCharacter == null) {
+          // The character before the completed syntax is an inline placeholder,
+          // which is a valid boundary (like the start of the text). Keep the
+          // successful parsers and stop — we can't scan further upstream.
+          break;
+        }
+        successfulParsers.removeWhere((parser) => !parser.canFollowCharacter(priorCharacter));
       }
     }
 
@@ -358,9 +380,10 @@ class _UpstreamInlineMarkdownParser {
       return null;
     }
 
-    final characterAtCaret = attributedText[caretOffset - 1] as String; // -1 because caret sits after character
+    final characterAtCaret = _characterAt(caretOffset - 1); // -1 because caret sits after character
     if (characterAtCaret != " ") {
       // Don't linkify unless the user just inserted a space after the token.
+      // (An inline placeholder yields null here, which also short-circuits.)
       return null;
     }
 
@@ -410,6 +433,18 @@ class _UpstreamInlineMarkdownParser {
 
     // We found links, but none of them are immediately upstream.
     return null;
+  }
+
+  /// Returns the character at [offset], or `null` when that cell holds an inline
+  /// placeholder object (e.g. a mention/issue pill) rather than a `String`.
+  ///
+  /// `AttributedText.operator[]` returns `placeholders[offset] ?? text[offset]`,
+  /// so a placeholder cell is a non-`String` object. Returning `null` lets the
+  /// upstream scan stop at the placeholder instead of crashing on a bad
+  /// `as String` cast.
+  String? _characterAt(int offset) {
+    final cell = attributedText[offset];
+    return cell is String ? cell : null;
   }
 
   void _updatePossibleSyntaxes(String character, int characterIndex) {
