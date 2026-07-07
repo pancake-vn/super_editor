@@ -873,13 +873,17 @@ class SuperEditorState extends State<SuperEditor> {
             SuperEditorIosControlsScope.rootOf(context),
           ),
           child: SuperEditorIosMagnifierOverlayManager(
-            child: EditorFloatingCursor(
-              editor: widget.editor,
-              document: widget.editor.document,
-              getDocumentLayout: () => _docLayoutKey.currentState as DocumentLayout,
+            child: SuperEditorIosHandlesOverlayManager(
+              tapRegionGroupId: widget.tapRegionGroupId,
               selection: widget.editor.composer.selectionNotifier,
-              scrollChangeSignal: _scrollChangeSignal,
-              child: child,
+              child: EditorFloatingCursor(
+                editor: widget.editor,
+                document: widget.editor.document,
+                getDocumentLayout: () => _docLayoutKey.currentState as DocumentLayout,
+                selection: widget.editor.composer.selectionNotifier,
+                scrollChangeSignal: _scrollChangeSignal,
+                child: child,
+              ),
             ),
           ),
         );

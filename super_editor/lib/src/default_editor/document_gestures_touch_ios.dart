@@ -179,6 +179,30 @@ class SuperEditorIosControlsController {
   /// If no drag handle is being dragged, this value is `null`.
   final ValueNotifier<HandleType?> handleBeingDragged = ValueNotifier<HandleType?>(null);
 
+  /// Links to the visual position of the upstream (base) selection handle's ball.
+  ///
+  /// The expanded iOS handles draw a ball that protrudes above/below the
+  /// selection, which can fall outside the scrollable's clip bounds. To keep the
+  /// ball draggable, an invisible drag target is positioned over it by a
+  /// [Follower] in the handles overlay — which lives outside the scroll region.
+  /// This [LeaderLink] bridges the ball's in-content position to that overlay.
+  final upstreamHandleFocalPoint = LeaderLink();
+
+  /// Links to the visual position of the downstream (extent) selection handle's ball.
+  ///
+  /// See [upstreamHandleFocalPoint].
+  final downstreamHandleFocalPoint = LeaderLink();
+
+  /// Gesture delegates that service upstream/downstream handle drags.
+  ///
+  /// Published by the [IosDocumentTouchInteractor], which owns the drag-selection
+  /// state machine, and consumed by the handles overlay. This lets a drag that
+  /// starts on a ball outside the scroll clip run through the exact same tested
+  /// drag logic as an in-viewport handle drag. `null` until the interactor has
+  /// initialized (which always happens before any handle is displayed).
+  DocumentHandleGestureDelegate? upstreamHandleGestureDelegate;
+  DocumentHandleGestureDelegate? downstreamHandleGestureDelegate;
+
   /// Controls the iOS floating cursor.
   late final FloatingCursorController floatingCursorController;
 
@@ -368,6 +392,22 @@ class _IosDocumentTouchInteractorState extends State<IosDocumentTouchInteractor>
   bool get _isLongPressInProgress => _longPressStrategy != null;
   IosLongPressSelectionStrategy? _longPressStrategy;
 
+  /// Delegates that let the handles overlay drive upstream/downstream handle
+  /// drags through this interactor. Created once and published on the controls
+  /// controller in [didChangeDependencies]. See [_onOverlayHandlePanStart].
+  late final DocumentHandleGestureDelegate _upstreamHandleGestureDelegate = DocumentHandleGestureDelegate(
+    onPanStart: (details) => _onOverlayHandlePanStart(details, HandleType.upstream),
+    onPanUpdate: _onOverlayHandlePanUpdate,
+    onPanEnd: _onOverlayHandlePanEnd,
+    onPanCancel: _onOverlayHandlePanCancel,
+  );
+  late final DocumentHandleGestureDelegate _downstreamHandleGestureDelegate = DocumentHandleGestureDelegate(
+    onPanStart: (details) => _onOverlayHandlePanStart(details, HandleType.downstream),
+    onPanUpdate: _onOverlayHandlePanUpdate,
+    onPanEnd: _onOverlayHandlePanEnd,
+    onPanCancel: _onOverlayHandlePanCancel,
+  );
+
   // Cached view metrics to ignore unnecessary didChangeMetrics calls.
   Size? _lastSize;
   ViewPadding? _lastInsets;
@@ -412,6 +452,12 @@ class _IosDocumentTouchInteractorState extends State<IosDocumentTouchInteractor>
     _controlsController!.floatingCursorController.addListener(_floatingCursorListener);
     _controlsController!.floatingCursorController.cursorGeometryInViewport.addListener(_onFloatingCursorGeometryChange);
 
+    // Publish handle-drag delegates so the handles overlay (which owns the hit
+    // targets for the off-screen handle balls) drives drags through this
+    // interactor's drag-selection state machine.
+    _controlsController!.upstreamHandleGestureDelegate = _upstreamHandleGestureDelegate;
+    _controlsController!.downstreamHandleGestureDelegate = _downstreamHandleGestureDelegate;
+
     _ancestorScrollPosition = context.findAncestorScrollableWithVerticalScroll?.position;
   }
 
@@ -432,6 +478,15 @@ class _IosDocumentTouchInteractorState extends State<IosDocumentTouchInteractor>
     _controlsController!.floatingCursorController.removeListener(_floatingCursorListener);
     _controlsController!.floatingCursorController.cursorGeometryInViewport
         .removeListener(_onFloatingCursorGeometryChange);
+
+    // Clear our handle-drag delegates so the overlay doesn't call into a
+    // disposed interactor.
+    if (_controlsController!.upstreamHandleGestureDelegate == _upstreamHandleGestureDelegate) {
+      _controlsController!.upstreamHandleGestureDelegate = null;
+    }
+    if (_controlsController!.downstreamHandleGestureDelegate == _downstreamHandleGestureDelegate) {
+      _controlsController!.downstreamHandleGestureDelegate = null;
+    }
 
     widget.document.removeListener(_onDocumentChange);
 
@@ -946,13 +1001,11 @@ class _IosDocumentTouchInteractorState extends State<IosDocumentTouchInteractor>
     } else if (selection.isCollapsed && _isOverCollapsedHandle(details.localPosition)) {
       _dragMode = DragMode.collapsed;
       _dragHandleType = HandleType.collapsed;
-    } else if (_isOverBaseHandle(details.localPosition)) {
-      _dragMode = DragMode.base;
-      _dragHandleType = HandleType.upstream;
-    } else if (_isOverExtentHandle(details.localPosition)) {
-      _dragMode = DragMode.extent;
-      _dragHandleType = HandleType.downstream;
     } else {
+      // Expanded-handle (upstream/downstream) drags are owned by the handles
+      // overlay ([SuperEditorIosHandlesOverlayManager]), whose drag targets sit
+      // over the handle balls — which can protrude outside this interactor's
+      // (viewport-bounded) hit region. See [_onOverlayHandlePanStart].
       return;
     }
 
@@ -1198,6 +1251,76 @@ class _IosDocumentTouchInteractorState extends State<IosDocumentTouchInteractor>
 
     widget.dragHandleAutoScroller.value?.stopAutoScrollHandleMonitoring();
     scrollPosition.removeListener(_onAutoScrollChange);
+  }
+
+  // ------------------------------------------------------------------------
+  // Overlay-driven handle dragging.
+  //
+  // The expanded iOS handles draw a ball that protrudes above/below the
+  // selection. Those balls can fall outside the scrollable's clip bounds, so
+  // this interactor's own gesture detector (which is bounded by the viewport)
+  // can never receive a touch on them. Instead, the handles overlay
+  // ([SuperEditorIosHandlesOverlayManager]) hosts an invisible drag target over
+  // each ball — outside the clip — and forwards the drag here via delegates
+  // published on the controls controller. The drag itself reuses the exact same
+  // state machine as an in-viewport handle drag.
+  // ------------------------------------------------------------------------
+
+  void _onOverlayHandlePanStart(DragStartDetails details, HandleType handleType) {
+    // Cancel any pending long-press and clear the tap-down offset so magnifier
+    // positioning uses the drag branch, not the tap branch (see
+    // [_placeFocalPointNearTouchOffset]).
+    _globalTapDownOffset = null;
+    _tapDownLongPressTimer?.cancel();
+
+    _dragMode = handleType == HandleType.upstream ? DragMode.base : DragMode.extent;
+    _dragHandleType = handleType;
+
+    _controlsController!
+      ..doNotBlinkCaret()
+      ..hideToolbar()
+      ..showMagnifier()
+      ..handleBeingDragged.value = handleType;
+
+    // Anchors the drag to the selection endpoint's center (not the finger), so
+    // the offset between the finger-on-the-ball and the caret doesn't jump the
+    // selection.
+    _updateDragStartLocation(details.globalPosition);
+
+    widget.dragHandleAutoScroller.value?.startAutoScrollHandleMonitoring();
+    scrollPosition.addListener(_onAutoScrollChange);
+  }
+
+  void _onOverlayHandlePanUpdate(DragUpdateDetails details) {
+    _globalDragOffset = details.globalPosition;
+    _dragEndInInteractor = interactorBox.globalToLocal(details.globalPosition);
+    final dragEndInViewport = _interactorOffsetToViewportOffset(_dragEndInInteractor!);
+
+    _updateSelectionForNewDragHandleLocation();
+
+    widget.dragHandleAutoScroller.value?.updateAutoScrollHandleMonitoring(
+      dragEndInViewport: dragEndInViewport,
+    );
+
+    _placeFocalPointNearTouchOffset();
+  }
+
+  void _onOverlayHandlePanEnd(DragEndDetails details) {
+    _controlsController!
+      ..hideMagnifier()
+      ..blinkCaret()
+      ..handleBeingDragged.value = null;
+
+    if (_dragMode != null) {
+      _onDragSelectionEnd();
+    }
+  }
+
+  void _onOverlayHandlePanCancel() {
+    if (_dragMode != null) {
+      _onDragSelectionEnd();
+    }
+    _controlsController!.handleBeingDragged.value = null;
   }
 
   void _onLongPressEnd() {
@@ -1473,8 +1596,10 @@ class _IosDocumentTouchInteractorState extends State<IosDocumentTouchInteractor>
                       return false;
                     }
                     final panDown = interactorBox.globalToLocal(_globalTapDownOffset!);
-                    final isOverHandle =
-                        _isOverBaseHandle(panDown) || _isOverExtentHandle(panDown) || _isOverCollapsedHandle(panDown);
+                    // Only the collapsed caret is dragged by this interactor.
+                    // Expanded upstream/downstream handle drags are owned by the
+                    // handles overlay (see [SuperEditorIosHandlesOverlayManager]).
+                    final isOverHandle = _isOverCollapsedHandle(panDown);
                     final res = isOverHandle || _isLongPressInProgress;
                     return res;
                   }
@@ -1702,6 +1827,163 @@ class SuperEditorIosMagnifierOverlayManagerState extends State<SuperEditorIosMag
       // and the focal point. This value was chosen empirically.
       offsetFromFocalPoint: Offset(0, (-defaultIosMagnifierSize.height / 2) - 20),
       handleColor: _controlsController!.handleColor,
+    );
+  }
+}
+
+/// The diameter of the invisible, finger-friendly drag target that the handles
+/// overlay places over each expanded iOS handle ball.
+///
+/// The painted ball is small, and it can protrude beyond the scrollable's clip
+/// bounds. This overlay target sits over the ball (outside the clip) and gives
+/// the user a comfortable region to grab. Sized close to the iOS minimum
+/// interactive dimension.
+const _iosExpandedHandleBallTouchDiameter = 44.0;
+
+/// Adds and removes invisible drag targets over the expanded iOS selection
+/// handle balls, so those balls stay draggable even when they protrude outside
+/// the scrollable's clip region.
+///
+/// The visual handles are still painted by the [IosHandlesDocumentLayer] inside
+/// the document. Each handle ball carries a [Leader]; this manager renders a
+/// matching [Follower] in an [OverlayPortal] — which lives outside the scroll
+/// clip — holding an invisible pan target. Drags are forwarded to the
+/// [IosDocumentTouchInteractor] via the gesture delegates it publishes on the
+/// [SuperEditorIosControlsController], so they reuse the exact same drag-
+/// selection logic as an in-viewport handle drag.
+///
+/// The collapsed caret has no ball and stays within the content bounds, so it
+/// is dragged by the interactor directly and isn't handled here.
+class SuperEditorIosHandlesOverlayManager extends StatefulWidget {
+  const SuperEditorIosHandlesOverlayManager({
+    super.key,
+    this.tapRegionGroupId,
+    required this.selection,
+    required this.child,
+  });
+
+  /// {@macro super_editor_tap_region_group_id}
+  final String? tapRegionGroupId;
+
+  /// The current document selection. The drag targets are only present while the
+  /// selection is expanded (the only time the expanded handles exist).
+  final ValueListenable<DocumentSelection?> selection;
+
+  final Widget child;
+
+  @override
+  State<SuperEditorIosHandlesOverlayManager> createState() => SuperEditorIosHandlesOverlayManagerState();
+}
+
+@visibleForTesting
+class SuperEditorIosHandlesOverlayManagerState extends State<SuperEditorIosHandlesOverlayManager> {
+  final OverlayPortalController _overlayPortalController = OverlayPortalController();
+  SuperEditorIosControlsController? _controlsController;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    _controlsController = SuperEditorIosControlsScope.rootOf(context);
+
+    // Show the overlay on the next frame because `show()` can't be called during
+    // a build.
+    onNextFrame((_) {
+      _overlayPortalController.show();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SliverHybridStack(
+      children: [
+        widget.child,
+        OverlayPortal(
+          controller: _overlayPortalController,
+          overlayChildBuilder: _buildOverlay,
+          child: const SizedBox(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildOverlay(BuildContext context) {
+    return TapRegion(
+      groupId: widget.tapRegionGroupId,
+      child: ValueListenableBuilder(
+        valueListenable: widget.selection,
+        builder: (context, selection, child) {
+          if (selection == null || selection.isCollapsed) {
+            // No expanded handles, so no drag targets. (Also avoids leaving an
+            // invisible hit target lingering at an unlinked Follower's origin.)
+            return const SizedBox();
+          }
+
+          return Stack(
+            children: [
+              _buildHandleDragTarget(
+                link: _controlsController!.upstreamHandleFocalPoint,
+                getDelegate: () => _controlsController!.upstreamHandleGestureDelegate,
+              ),
+              _buildHandleDragTarget(
+                link: _controlsController!.downstreamHandleFocalPoint,
+                getDelegate: () => _controlsController!.downstreamHandleGestureDelegate,
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHandleDragTarget({
+    required LeaderLink link,
+    required DocumentHandleGestureDelegate? Function() getDelegate,
+  }) {
+    return Follower.withOffset(
+      link: link,
+      // The Leader is the handle ball; center the invisible target on it.
+      leaderAnchor: Alignment.center,
+      followerAnchor: Alignment.center,
+      showWhenUnlinked: false,
+      child: RawGestureDetector(
+        // Translucent (not opaque) so a *tap* over the target still falls
+        // through to the content behind it — only pan gestures are claimed (via
+        // the gesture arena). Matches the Android handle targets.
+        behavior: HitTestBehavior.translucent,
+        gestures: <Type, GestureRecognizerFactory>{
+          EagerPanGestureRecognizer: GestureRecognizerFactoryWithHandlers<EagerPanGestureRecognizer>(
+            () => EagerPanGestureRecognizer(),
+            (EagerPanGestureRecognizer instance) {
+              // NOTE: use block-body closures (not `=>`) so the trailing
+              // cascades bind to `instance` rather than being absorbed into the
+              // closure body.
+              instance
+                ..shouldAccept = () {
+                  return getDelegate() != null;
+                }
+                ..dragStartBehavior = DragStartBehavior.down
+                ..onStart = (details) {
+                  getDelegate()?.onPanStart?.call(details);
+                }
+                ..onUpdate = (details) {
+                  getDelegate()?.onPanUpdate?.call(details);
+                }
+                ..onEnd = (details) {
+                  getDelegate()?.onPanEnd?.call(details);
+                }
+                ..onCancel = () {
+                  getDelegate()?.onPanCancel?.call();
+                }
+                ..gestureSettings = MediaQuery.maybeOf(context)?.gestureSettings;
+            },
+          ),
+        },
+        child: const SizedBox(
+          width: _iosExpandedHandleBallTouchDiameter,
+          height: _iosExpandedHandleBallTouchDiameter,
+        ),
+      ),
     );
   }
 }
@@ -2073,6 +2355,8 @@ class SuperEditorIosHandlesDocumentLayerBuilder implements SuperEditorLayerBuild
       handleBallShadow: handleBallShadow,
       shouldCaretBlink: controlsController.shouldCaretBlink,
       floatingCursorController: controlsController.floatingCursorController,
+      upstreamHandleFocalPoint: controlsController.upstreamHandleFocalPoint,
+      downstreamHandleFocalPoint: controlsController.downstreamHandleFocalPoint,
     );
   }
 }

@@ -517,6 +517,8 @@ class IosHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
     this.handleBallShadow,
     required this.shouldCaretBlink,
     this.floatingCursorController,
+    this.upstreamHandleFocalPoint,
+    this.downstreamHandleFocalPoint,
     this.showDebugPaint = false,
   });
 
@@ -555,6 +557,17 @@ class IosHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
   /// during which the regular caret is either hidden, or is displayed as a gray
   /// caret when the floating cursor is far away from its nearest text.
   final FloatingCursorController? floatingCursorController;
+
+  /// (Optional) Link attached to the upstream (base) handle's ball, so an
+  /// overlay outside the scrollable's clip can position an invisible drag target
+  /// over the ball. Without this, the ball is only draggable while it sits
+  /// within the scroll viewport's bounds.
+  final LeaderLink? upstreamHandleFocalPoint;
+
+  /// (Optional) Link attached to the downstream (extent) handle's ball.
+  ///
+  /// See [upstreamHandleFocalPoint].
+  final LeaderLink? downstreamHandleFocalPoint;
 
   final bool showDebugPaint;
 
@@ -920,6 +933,7 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
           caretWidth: widget.caretWidth,
           ballRadius: ballRadius,
           ballShadow: widget.handleBallShadow,
+          ballLink: widget.upstreamHandleFocalPoint,
         ),
       ),
     );
@@ -947,6 +961,7 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
           caretWidth: widget.caretWidth,
           ballRadius: ballRadius,
           ballShadow: widget.handleBallShadow,
+          ballLink: widget.downstreamHandleFocalPoint,
         ),
       ),
     );

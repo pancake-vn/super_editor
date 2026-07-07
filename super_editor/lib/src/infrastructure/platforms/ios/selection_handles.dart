@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:follow_the_leader/follow_the_leader.dart';
 import 'package:super_editor/src/infrastructure/blinking_caret.dart';
 import 'package:super_editor/src/infrastructure/touch_controls.dart';
 import 'package:super_text_layout/super_text_layout.dart';
@@ -29,6 +30,7 @@ class IOSSelectionHandle extends StatelessWidget {
     this.caretWidth = 2,
     this.ballRadius = 4,
     this.ballShadow,
+    this.ballLink,
     this.handleType = HandleType.upstream,
   }) : super(key: key);
 
@@ -39,6 +41,7 @@ class IOSSelectionHandle extends StatelessWidget {
     this.caretWidth = 2,
     this.ballRadius = 4,
     this.ballShadow,
+    this.ballLink,
     this.handleType = HandleType.downstream,
   }) : super(key: key);
 
@@ -57,6 +60,11 @@ class IOSSelectionHandle extends StatelessWidget {
   /// The radius of the ball that's displayed above or
   /// below the caret.
   final double ballRadius;
+
+  /// (Optional) Link attached to the ball, so an overlay can position a drag
+  /// target over it (the ball can protrude outside the scrollable's clip, where
+  /// it would otherwise be un-draggable).
+  final LeaderLink? ballLink;
 
   /// The type of handle, e.g., upstream, downstream, collapsed.
   final HandleType handleType;
@@ -91,7 +99,7 @@ class IOSSelectionHandle extends StatelessWidget {
 
   Widget _buildBall() {
     final ballDiameter = ballRadius * 2;
-    return Container(
+    final ball = Container(
       width: ballDiameter,
       height: ballDiameter,
       decoration: BoxDecoration(
@@ -100,6 +108,14 @@ class IOSSelectionHandle extends StatelessWidget {
         boxShadow: ballShadow,
       ),
     );
+
+    if (ballLink == null) {
+      return ball;
+    }
+
+    // Attach a Leader to the ball so an overlay outside the scrollable's clip
+    // can follow it with an invisible drag target.
+    return Leader(link: ballLink!, child: ball);
   }
 }
 
