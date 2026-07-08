@@ -209,4 +209,10 @@ class TextSelectionPainter extends CustomPainter {
 ///
 /// This can be used to align other widgets, like the drag handles, with the
 /// selection highlight box.
-const selectionHighlightBoxVerticalExpansion = 2.0;
+///
+/// Kept at 0 so each line's highlight box tiles exactly to the line height.
+/// A non-zero value inflates every box on both edges, which makes a multi-line
+/// selection overlap between adjacent lines — with a translucent selection
+/// color the overlap double-paints into a visible seam. The iOS drag handles
+/// offset themselves by this same constant, so they stay aligned automatically.
+const selectionHighlightBoxVerticalExpansion = 0.0;
