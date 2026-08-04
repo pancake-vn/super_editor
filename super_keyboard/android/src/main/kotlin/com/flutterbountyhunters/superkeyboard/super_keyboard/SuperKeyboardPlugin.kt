@@ -163,9 +163,18 @@ class SuperKeyboardPlugin: FlutterPlugin, ActivityAware, DefaultLifecycleObserve
     ViewCompat.setOnApplyWindowInsetsListener(mainView!!, this)
 
     // Track keyboard fully open, fully closed, and height.
+    //
+    // DISPATCH_MODE_CONTINUE_ON_SUBTREE, not DISPATCH_MODE_STOP: this callback is
+    // installed on android.R.id.content, which is an ancestor of the FlutterView.
+    // STOP would end insets-animation dispatch here, so no descendant would ever
+    // receive onProgress — including the Flutter engine's own
+    // ImeSyncDeferringInsetsCallback, which is what drives the soft keyboard's
+    // open/close animation. This callback only observes (it caches measurements and
+    // forwards them to Dart) and returns the insets unmodified, so there is nothing
+    // for it to consume.
     ViewCompat.setWindowInsetsAnimationCallback(
       mainView!!,
-      object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_STOP) {
+      object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
         override fun onPrepare(
           animation: WindowInsetsAnimationCompat
         ) {
