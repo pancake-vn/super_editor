@@ -79,22 +79,60 @@ class _DocumentScrollableState extends State<DocumentScrollable> with SingleTick
 
   ScrollableInstrumentation? _debugInstrumentation;
 
+  bool _isActive = true;
+
+  /// Whether [_attachToScrollable] still needs to run, because it was scheduled
+  /// but skipped while this widget was inactive.
+  bool _needsAttach = false;
+
   @override
   void initState() {
     super.initState();
     _scrollController = widget.scrollController ?? ScrollController();
 
-    onNextFrame((_) {
-      // Wait until the next frame to attach to auto-scroller because
-      // our ScrollController isn't attached to the Scrollable, yet.
-      widget.autoScroller.attachScrollable(
-        this,
-        () => _viewport,
-        () => _scrollPosition,
-      );
+    _needsAttach = true;
+    // Wait until the next frame to attach to auto-scroller because
+    // our ScrollController isn't attached to the Scrollable, yet.
+    onNextFrame((_) => _attachToScrollable());
+  }
 
-      widget.scroller?.attach(_scrollPosition);
-    });
+  @override
+  void activate() {
+    super.activate();
+    _isActive = true;
+
+    // We were re-inserted into the tree before we managed to attach. Ancestor
+    // lookups are safe again, so retry on the next frame - by then our
+    // ScrollController is attached to the Scrollable again.
+    if (_needsAttach) {
+      onNextFrame((_) => _attachToScrollable());
+    }
+  }
+
+  @override
+  void deactivate() {
+    _isActive = false;
+    super.deactivate();
+  }
+
+  /// Attaches the auto-scroller and the scroller to our [ScrollPosition],
+  /// unless this widget left the tree before this ran.
+  void _attachToScrollable() {
+    if (!mounted || !_isActive) {
+      // Leave [_needsAttach] set: if we're re-inserted into the tree,
+      // [activate] retries.
+      return;
+    }
+
+    _needsAttach = false;
+
+    widget.autoScroller.attachScrollable(
+      this,
+      () => _viewport,
+      () => _scrollPosition,
+    );
+
+    widget.scroller?.attach(_scrollPosition);
   }
 
   @override
@@ -378,8 +416,12 @@ class AutoScrollController with ChangeNotifier {
     _getScrollPosition = scrollPositionResolver;
 
     // TODO: what if the scroll position changes? We'll be listening the old one...
-    scrollPositionResolver().addListener(_onScrollPositionChange);
+    _attachedScrollPosition = scrollPositionResolver()..addListener(_onScrollPositionChange);
   }
+
+  /// The [ScrollPosition] that [_onScrollPositionChange] is registered with,
+  /// held so that [detachScrollable] can unregister from it.
+  ScrollPosition? _attachedScrollPosition;
 
   void _onScrollPositionChange() {
     // The scroll position changed. Probably because the position scrolled
@@ -400,6 +442,12 @@ class AutoScrollController with ChangeNotifier {
     if (!hasScrollable) {
       return;
     }
+
+    // Safe to call on a disposed position - `removeListener` explicitly
+    // tolerates that, and the position may already be gone when we detach
+    // from a widget that's being disposed.
+    _attachedScrollPosition?.removeListener(_onScrollPositionChange);
+    _attachedScrollPosition = null;
 
     if (_ticker!.isActive) {
       _ticker!.stop();
