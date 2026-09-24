@@ -125,6 +125,96 @@ void main() {
             expect(doc, equalsMarkdown("A **bolder**"));
           });
 
+          testWidgetsOnAllPlatforms("unless the user toggled the style off at that position", (tester) async {
+            final context = await tester //
+                .createDocument()
+                .fromMarkdown("**TEST**")
+                .withInputSource(TextInputSource.ime)
+                .pump();
+
+            final doc = SuperEditorInspector.findDocument()!;
+            final composer = context.findEditContext().composer;
+
+            // Place the caret at "TEST|", which activates bold.
+            await tester.placeCaretInParagraph(doc.first.id, 4);
+            expect(composer.preferences.currentAttributions, {boldAttribution});
+
+            // Toggle bold off and type plain text.
+            composer.preferences.toggleStyle(boldAttribution);
+            await tester.typeImeText("kkk");
+            expect(doc, equalsMarkdown("**TEST**kkk"));
+
+            // Delete the plain text, back to "TEST|".
+            await tester.pressBackspace();
+            await tester.pressBackspace();
+            await tester.pressBackspace();
+
+            // Ensure bold wasn't re-activated from the preceding text.
+            expect(composer.preferences.currentAttributions, isEmpty);
+
+            // Type again and ensure the text is still plain.
+            await tester.typeImeText("kkk");
+            expect(doc, equalsMarkdown("**TEST**kkk"));
+          });
+
+          testWidgetsOnAllPlatforms("unless the user toggled the style off, and then deleted past that position",
+              (tester) async {
+            final context = await tester //
+                .createDocument()
+                .fromMarkdown("**TEST**")
+                .withInputSource(TextInputSource.ime)
+                .pump();
+
+            final doc = SuperEditorInspector.findDocument()!;
+            final composer = context.findEditContext().composer;
+
+            // Type a bold space after "TEST", then toggle bold off and type plain text.
+            await tester.placeCaretInParagraph(doc.first.id, 4);
+            await tester.typeImeText(" ");
+            composer.preferences.toggleStyle(boldAttribution);
+            await tester.typeImeText("kkk");
+
+            // Delete the plain text and the bold space, back to "TEST|".
+            await tester.pressBackspace();
+            await tester.pressBackspace();
+            await tester.pressBackspace();
+            await tester.pressBackspace();
+
+            // Ensure bold wasn't re-activated from the preceding text.
+            expect(composer.preferences.currentAttributions, isEmpty);
+
+            // Type again and ensure the text is still plain.
+            await tester.typeImeText("kkk");
+            expect(doc, equalsMarkdown("**TEST**kkk"));
+          });
+
+          testWidgetsOnAllPlatforms("after moving the caret away from where the style was toggled off", (tester) async {
+            final context = await tester //
+                .createDocument()
+                .fromMarkdown("**TEST**")
+                .withInputSource(TextInputSource.ime)
+                .pump();
+
+            final doc = SuperEditorInspector.findDocument()!;
+            final composer = context.findEditContext().composer;
+
+            // Toggle bold off at "TEST|" and type plain text.
+            await tester.placeCaretInParagraph(doc.first.id, 4);
+            composer.preferences.toggleStyle(boldAttribution);
+            await tester.typeImeText("kkk");
+
+            // Move the caret away and back to the end, and delete the plain text.
+            await tester.pressLeftArrow();
+            await tester.pressRightArrow();
+            await tester.pressBackspace();
+            await tester.pressBackspace();
+            await tester.pressBackspace();
+
+            // The user moved the caret, so styles follow the preceding text again.
+            await tester.typeImeText("er");
+            expect(doc, equalsMarkdown("**TESTer**"));
+          });
+
           // Text color is a stand-in for any type-based attribution, e.g.,
           // background color.
           testWidgetsOnAllPlatforms("text color", (tester) async {
