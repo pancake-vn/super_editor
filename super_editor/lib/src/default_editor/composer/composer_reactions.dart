@@ -63,8 +63,11 @@ class UpdateComposerTextStylesReaction extends EditReaction {
   void react(EditContext editContext, RequestDispatcher requestDispatcher, List<EditEvent> changeList) {
     final lastSelectionChange =
         changeList.lastWhereOrNull((element) => element is SelectionChangeEvent) as SelectionChangeEvent?;
-    if (lastSelectionChange == null) {
-      // The selection didn't change in this transaction.
+
+    final containDocumentEditEvent = changeList.any((element) => element is DocumentEdit);
+
+    if (lastSelectionChange == null || containDocumentEditEvent) {
+      // The selection didn't change in this transaction or selection changed because of edit event.
       return;
     }
 
