@@ -40,22 +40,19 @@ import 'package:super_editor/src/default_editor/text.dart';
 /// if the selection is expanded, then this reaction doesn't activate any
 /// styles.
 ///
-/// When the user deletes content, styles are usually re-activated from the text
-/// before the caret. The exception is when the user explicitly typed with other
-/// styles right after that text, e.g., toggled bold off after bold text, typed
-/// some plain text, and then deleted that plain text. In that case the caret is
-/// back where the user chose the other styles, so those styles are restored,
-/// even if the user keeps deleting into the preceding text:
+/// When the user explicitly toggles styles, e.g., with CMD+B, the choice is
+/// recorded in [ComposerPreferences.styleChoice]. Deleting content back to, or
+/// past, that position restores the chosen styles instead of activating the
+/// styles of the preceding text:
 ///
 ///     **Hello **|         <- toggle bold off
 ///     **Hello **world|
 ///     **Hello **|         <- delete "world"
-///     **Hello **again|    <- still not bold
-///     **Hello**|          <- delete "again" and the space
+///     **Hello**|          <- delete the space
 ///     **Hello**again|     <- still not bold
 ///
-/// Moving the caret, e.g., by tapping or with the arrow keys, drops these styles,
-/// and styles are activated from the text around the caret again.
+/// Moving the caret drops the choice, and styles are activated from the text
+/// around the caret again.
 class UpdateComposerTextStylesReaction extends EditReaction {
   UpdateComposerTextStylesReaction({
     @Deprecated("Use styleValuesToExtend instead") //
@@ -77,17 +74,12 @@ class UpdateComposerTextStylesReaction extends EditReaction {
 
   DocumentSelection? _previousSelection;
 
-  /// The position where the user most recently typed with styles that differ from
-  /// the styles extended from the preceding text, e.g., after toggling bold off
-  /// following bold text.
-  _StyleOverride? _styleOverride;
-
   @override
   void react(EditContext editContext, RequestDispatcher requestDispatcher, List<EditEvent> changeList) {
     final lastSelectionChange =
         changeList.lastWhereOrNull((element) => element is SelectionChangeEvent) as SelectionChangeEvent?;
 
-    _updateStyleOverride(editContext.document, changeList, lastSelectionChange);
+    _syncStyleChoice(editContext, changeList, lastSelectionChange);
 
     if (lastSelectionChange == null) {
       // The selection didn't change in this transaction.
@@ -109,43 +101,17 @@ class UpdateComposerTextStylesReaction extends EditReaction {
     _previousSelection = composer.selection;
   }
 
-  /// Records, moves, or forgets the [_styleOverride] based on the given [changeList].
-  void _updateStyleOverride(
-    Document document,
+  /// Keeps the user's [ComposerPreferences.styleChoice] in sync with the edits in
+  /// [changeList], or clears it when it no longer applies.
+  void _syncStyleChoice(
+    EditContext editContext,
     List<EditEvent> changeList,
     SelectionChangeEvent? lastSelectionChange,
   ) {
-    for (final event in changeList) {
-      if (event is! DocumentEdit) {
-        continue;
-      }
-
-      final change = event.change;
-      final override = _styleOverride;
-      if (change is TextInsertionEvent) {
-        if (override != null && change.nodeId == override.nodeId && change.offset < override.offset) {
-          // Content was inserted before the override, so the text before the
-          // override is no longer the text the user chose to diverge from.
-          _styleOverride = null;
-        }
-
-        _recordStyleOverrideIfNeeded(document, change);
-      } else if (change is TextDeletedEvent) {
-        if (override != null && change.nodeId == override.nodeId && change.offset < override.offset) {
-          // Text before the override was deleted, e.g., the user kept deleting past it.
-          // The user hasn't chosen other styles since, so keep the override where the
-          // deletion started, or shift it along with the text that follows the deletion.
-          final deletionEnd = change.offset + change.deletedText.length;
-          _styleOverride = _StyleOverride(
-            override.nodeId,
-            deletionEnd >= override.offset ? change.offset : override.offset - change.deletedText.length,
-            override.styles,
-          );
-        }
-      } else if (change is NodeDocumentChange && override != null && change.nodeId == override.nodeId) {
-        // The node changed in some other way, e.g., it was split, merged, or removed.
-        _styleOverride = null;
-      }
+    final preferences = editContext.find<MutableDocumentComposer>(Editor.composerKey).preferences;
+    final choice = preferences.styleChoice;
+    if (choice == null) {
+      return;
     }
 
     switch (lastSelectionChange?.changeType) {
@@ -153,53 +119,59 @@ class UpdateComposerTextStylesReaction extends EditReaction {
       case SelectionChangeType.insertContent:
       case SelectionChangeType.deleteContent:
       case SelectionChangeType.alteredContent:
-        // The caret moved as a result of typing or deleting, so the override still applies.
+        // The user is typing or deleting, so the choice still applies.
         break;
       default:
-        // The user moved the selection, which is when styles are re-activated from
-        // the text around the caret, so the override no longer applies.
-        _styleOverride = null;
-    }
-  }
-
-  void _recordStyleOverrideIfNeeded(Document document, TextInsertionEvent insertion) {
-    if (insertion.offset == 0 || insertion.text.isEmpty) {
-      // There's no preceding text whose styles could have been extended.
-      return;
+        // The user moved the selection, so styles should follow the text around the caret again.
+        preferences.updateStyleChoice(null);
+        return;
     }
 
-    final node = document.getNodeById(insertion.nodeId);
-    if (node is! TextNode || insertion.offset > node.text.length) {
-      return;
-    }
-
-    final precedingStyles = _extendableStyles(node.text.getAllAttributionsAt(insertion.offset - 1));
-    final insertedStyles = _extendableStyles(insertion.text.getAllAttributionsAt(0));
-    if (const SetEquality<Attribution>().equals(precedingStyles, insertedStyles)) {
-      if (_styleOverride?.nodeId == insertion.nodeId && _styleOverride?.offset == insertion.offset) {
-        // The user typed with the extended styles again at the override.
-        _styleOverride = null;
+    final nodeId = choice.position.nodeId;
+    final choiceNodePosition = choice.position.nodePosition;
+    var offset = choiceNodePosition is TextNodePosition ? choiceNodePosition.offset : null;
+    for (final event in changeList) {
+      if (event is! DocumentEdit) {
+        continue;
       }
+
+      final change = event.change;
+      if (change is! NodeDocumentChange || change.nodeId != nodeId) {
+        continue;
+      }
+
+      if (offset != null && change is TextInsertionEvent && change.offset >= offset) {
+        // The user typed at, or after, the choice.
+        continue;
+      }
+
+      if (offset != null && change is TextDeletedEvent) {
+        if (change.offset >= offset) {
+          // The user deleted text at, or after, the choice.
+          continue;
+        }
+
+        // The user deleted text before the choice, e.g., kept deleting past it. Move the
+        // choice to where the deletion started, or along with the text that follows it.
+        final deletionEnd = change.offset + change.deletedText.length;
+        offset = deletionEnd >= offset ? change.offset : offset - change.deletedText.length;
+        continue;
+      }
+
+      // The text before the choice changed in some other way, e.g., text was inserted
+      // before it, or the node was split, merged, or removed.
+      preferences.updateStyleChoice(null);
       return;
     }
 
-    _styleOverride = _StyleOverride(insertion.nodeId, insertion.offset, insertedStyles);
-  }
-
-  /// Returns the subset of [attributions] that this reaction extends to newly typed text,
-  /// excluding links, which are handled separately.
-  Set<Attribution> _extendableStyles(Set<Attribution> attributions) {
-    return {
-      // Extend any attributions whose value matches a desired value.
-      ...attributions.where((attribution) => _styleValuesToExtend.contains(attribution)),
-      // Extend any attribution whose class type matches a desired attribution type.
-      if (_styleTypesToExtend.isNotEmpty) //
-        ...attributions.where((attribution) => _styleTypesToExtend.contains(attribution.runtimeType)),
-      // Extend any attribution that's explicitly selected by a given selector.
-      if (_styleSelectorsToExtend.isNotEmpty) //
-        ...attributions.where(
-            (attribution) => _styleSelectorsToExtend.firstWhereOrNull((selector) => selector(attribution)) != null),
-    };
+    if (offset != null && offset != (choiceNodePosition as TextNodePosition).offset) {
+      preferences.updateStyleChoice(
+        ComposerStyleChoice(
+          position: DocumentPosition(nodeId: nodeId, nodePosition: TextNodePosition(offset: offset)),
+          styles: choice.styles,
+        ),
+      );
+    }
   }
 
   void _updateComposerStylesAtCaret(EditContext editContext) {
@@ -254,15 +226,19 @@ class UpdateComposerTextStylesReaction extends EditReaction {
 
     final textPosition = composer.selection!.extent.nodePosition as TextPosition;
 
-    if (textPosition.offset == 0 && node.text.isEmpty) {
+    final choice = composer.preferences.styleChoice;
+    final choiceNodePosition = choice?.position.nodePosition;
+    if (choice != null &&
+        choice.position.nodeId == node.id &&
+        choiceNodePosition is TextNodePosition &&
+        choiceNodePosition.offset == textPosition.offset) {
+      // The caret is back where the user explicitly chose styles, e.g., after deleting
+      // the text typed there. Honor that choice instead of the surrounding text.
+      composer.preferences.addStyles(choice.styles);
       return;
     }
 
-    final override = _styleOverride;
-    if (override != null && override.nodeId == node.id && override.offset == textPosition.offset) {
-      // The caret is back where the user chose different styles than the preceding
-      // text, e.g., after deleting the text typed there. Restore those styles.
-      composer.preferences.addStyles(override.styles);
+    if (textPosition.offset == 0 && node.text.isEmpty) {
       return;
     }
 
@@ -280,7 +256,19 @@ class UpdateComposerTextStylesReaction extends EditReaction {
     Set<Attribution> allAttributions = node.text.getAllAttributionsAt(offsetWithAttributionsToExtend);
 
     // Add desired expandable styles.
-    final newStyles = _extendableStyles(allAttributions);
+    final newStyles = {
+      // Extend any attributions whose value matches a desired value.
+      ...allAttributions.where((attribution) => _styleValuesToExtend.contains(attribution)).toSet(),
+      // Extend any attribution whose class type matches a desired attribution type.
+      if (_styleTypesToExtend.isNotEmpty) //
+        ...allAttributions.where((attribution) => _styleTypesToExtend.contains(attribution.runtimeType)).toSet(),
+      // Extend any attribution that's explicitly selected by a given selector.
+      if (_styleSelectorsToExtend.isNotEmpty) //
+        ...allAttributions
+            .where(
+                (attribution) => _styleSelectorsToExtend.firstWhereOrNull((selector) => selector(attribution)) != null)
+            .toSet(),
+    };
 
     // TODO: we shouldn't have such specific behavior in here. Figure out how to generalize this.
     // Add a link attribution only if the selection sits at the middle of the link.
@@ -298,14 +286,6 @@ class UpdateComposerTextStylesReaction extends EditReaction {
 
     composer.preferences.addStyles(newStyles);
   }
-}
-
-class _StyleOverride {
-  const _StyleOverride(this.nodeId, this.offset, this.styles);
-
-  final String nodeId;
-  final int offset;
-  final Set<Attribution> styles;
 }
 
 /// A function that returns `true` if the given [attribution] should be automatically

@@ -188,6 +188,33 @@ void main() {
             expect(doc, equalsMarkdown("**TEST**kkk"));
           });
 
+          testWidgetsOnAllPlatforms("unless the user toggled the style off, and then deleted without typing",
+              (tester) async {
+            final context = await tester //
+                .createDocument()
+                .fromMarkdown("**TEST**")
+                .withInputSource(TextInputSource.ime)
+                .pump();
+
+            final doc = SuperEditorInspector.findDocument()!;
+            final composer = context.findEditContext().composer;
+
+            // Type a bold space after "TEST", then toggle bold off.
+            await tester.placeCaretInParagraph(doc.first.id, 4);
+            await tester.typeImeText(" ");
+            composer.preferences.toggleStyle(boldAttribution);
+
+            // Delete the bold space right away, back to "TEST|".
+            await tester.pressBackspace();
+
+            // Ensure bold wasn't re-activated from the preceding text.
+            expect(composer.preferences.currentAttributions, isEmpty);
+
+            // Type and ensure the text is plain.
+            await tester.typeImeText("kkk");
+            expect(doc, equalsMarkdown("**TEST**kkk"));
+          });
+
           testWidgetsOnAllPlatforms("after moving the caret away from where the style was toggled off", (tester) async {
             final context = await tester //
                 .createDocument()

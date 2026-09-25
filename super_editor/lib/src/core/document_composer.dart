@@ -24,6 +24,10 @@ abstract class DocumentComposer with ChangeNotifier {
   }) : _preferences = ComposerPreferences() {
     _streamController = StreamController<DocumentSelectionChange>.broadcast();
     _selectionNotifier.value = initialSelection;
+    _preferences._caretPosition = () {
+      final selection = this.selection;
+      return selection != null && selection.isCollapsed ? selection.extent : null;
+    };
     _preferences.addListener(() {
       editorLog.fine("Composer preferences changed");
       notifyListeners();
@@ -220,17 +224,24 @@ class ComposerPreferences with ChangeNotifier {
 
   /// Adds or removes [attribution] to/from [currentAttributions] depending
   /// on whether [attribution] is already in [currentAttributions].
+  ///
+  /// Toggling is how the user explicitly chooses styles, e.g., with CMD+B or a
+  /// toolbar button, so this also records a [styleChoice].
   void toggleStyle(Attribution attribution) {
     if (_currentAttributions.contains(attribution)) {
       _currentAttributions.remove(attribution);
     } else {
       _currentAttributions.add(attribution);
     }
+    _recordStyleChoice();
     notifyListeners();
   }
 
   /// Adds or removes all [attributions] to/from [currentAttributions] depending
   /// on whether each attribution is already in [currentAttributions].
+  ///
+  /// Toggling is how the user explicitly chooses styles, e.g., with CMD+B or a
+  /// toolbar button, so this also records a [styleChoice].
   void toggleStyles(Set<Attribution> attributions) {
     for (final attribution in attributions) {
       if (_currentAttributions.contains(attribution)) {
@@ -239,7 +250,37 @@ class ComposerPreferences with ChangeNotifier {
         _currentAttributions.add(attribution);
       }
     }
+    _recordStyleChoice();
     notifyListeners();
+  }
+
+  /// The styles that the user most recently chose by toggling them, and where the
+  /// caret was when they did, or `null` if there's no such choice to honor.
+  ///
+  /// Unlike [currentAttributions], which the editor re-derives from the text around
+  /// the caret whenever the caret moves, this remembers what the user explicitly
+  /// asked for, so that deleting back to where the user toggled a style doesn't
+  /// silently undo it.
+  ///
+  /// The editor keeps this position in sync with document edits, and clears it
+  /// when the user moves the caret. See [updateStyleChoice].
+  ComposerStyleChoice? get styleChoice => _styleChoice;
+  ComposerStyleChoice? _styleChoice;
+
+  /// Replaces the [styleChoice], e.g., to move it along with a document edit, or to
+  /// clear it when it no longer applies.
+  void updateStyleChoice(ComposerStyleChoice? choice) {
+    _styleChoice = choice;
+  }
+
+  /// Returns the collapsed caret position, set by the owning [DocumentComposer].
+  DocumentPosition? Function()? _caretPosition;
+
+  void _recordStyleChoice() {
+    final caretPosition = _caretPosition?.call();
+    _styleChoice = caretPosition != null //
+        ? ComposerStyleChoice(position: caretPosition, styles: Set.of(_currentAttributions))
+        : null;
   }
 
   /// Removes all styles from [currentAttributions].
@@ -247,6 +288,19 @@ class ComposerPreferences with ChangeNotifier {
     _currentAttributions.clear();
     notifyListeners();
   }
+}
+
+/// Styles that the user explicitly chose at a caret [position].
+///
+/// See [ComposerPreferences.styleChoice].
+class ComposerStyleChoice {
+  const ComposerStyleChoice({
+    required this.position,
+    required this.styles,
+  });
+
+  final DocumentPosition position;
+  final Set<Attribution> styles;
 }
 
 /// A [ChangeSelectionRequest] that represents a user's desire to push the caret upstream
