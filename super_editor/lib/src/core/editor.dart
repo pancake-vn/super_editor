@@ -206,7 +206,9 @@ class Editor implements RequestDispatcher {
   /// Ends a transaction that was started with a call to [startTransaction].
   ///
   /// Does nothing if a transaction is not in-progress.
-  void endTransaction() {
+  void endTransaction() => _guarded(_endTransaction);
+
+  void _endTransaction() {
     if (!_isInTransaction) {
       return;
     }
@@ -261,9 +263,7 @@ class Editor implements RequestDispatcher {
     final changeList = _activeChangeList!;
     _activeChangeList = null;
 
-    for (final editable in context._resources.values) {
-      editable.onTransactionEnd(changeList);
-    }
+    _endTransactionOnEditables(changeList);
 
     editorEditsLog.info("Finished transaction");
   }
@@ -272,6 +272,9 @@ class Editor implements RequestDispatcher {
   ///
   /// Any changes that result from the given [requests] are reported to listeners as a series
   /// of [EditEvent]s.
+  ///
+  /// Pancake fork: if a command throws, the transaction is closed with the
+  /// changes made so far and the error is rethrown. See [_abortTransaction].
   @override
   void execute(List<EditRequest> requests) {
     if (requests.isEmpty) {
@@ -280,6 +283,10 @@ class Editor implements RequestDispatcher {
       return;
     }
 
+    _guarded(() => _execute(requests));
+  }
+
+  void _execute(List<EditRequest> requests) {
     editorEditsLog.finer("Executing requests:");
     for (final request in requests) {
       editorEditsLog.finer(" - ${request.runtimeType}");
@@ -294,7 +301,6 @@ class Editor implements RequestDispatcher {
 
     _activeCommandCount += 1;
 
-    final undoableCommands = <EditCommand>[];
     for (final request in requests) {
       // Execute the given request.
       final command = _findCommandForRequest(request);
@@ -302,17 +308,16 @@ class Editor implements RequestDispatcher {
       _activeChangeList!.addAll(commandChanges);
 
       if (command.historyBehavior == HistoryBehavior.undoable) {
-        undoableCommands.add(command);
+        // Pancake fork: recorded per command rather than after the loop, so a
+        // later request that throws doesn't drop the ones that completed from
+        // the history. See [_abortTransaction].
+        _transaction!.commands.add(command);
         _transaction!.changes.addAll(List.from(commandChanges));
       }
     }
 
     // Log the time at the end of the actions in this transaction.
     _transaction!.lastChangeTime = clock.now();
-
-    if (undoableCommands.isNotEmpty) {
-      _transaction!.commands.addAll(undoableCommands);
-    }
 
     if (_activeCommandCount == 1 && _isImplicitTransaction && !_isReacting) {
       endTransaction();
@@ -353,6 +358,83 @@ class Editor implements RequestDispatcher {
     _commandExecutor.reset();
 
     return changeList;
+  }
+
+  /// Pancake fork: runs [body] and, if it throws, aborts the open transaction
+  /// before rethrowing.
+  ///
+  /// Without this, a throwing command leaves the editor inside a transaction
+  /// forever: later edits never end it, so reactions and listeners never run
+  /// again and the editor stops updating.
+  ///
+  /// [execute] is re-entrant (reactions call it from inside [endTransaction]),
+  /// so the innermost failing call aborts and the outer ones find no
+  /// transaction left to abort. A caller that catches the error part-way up
+  /// and carries on would hit the torn-down transaction.
+  void _guarded(void Function() body) {
+    try {
+      body();
+    } catch (error) {
+      _abortTransaction(error);
+      rethrow;
+    }
+  }
+
+  /// Pancake fork: closes a transaction that failed with [error], keeping
+  /// whatever changes were made before the failure.
+  ///
+  /// Nothing is rolled back: a command that fails mid-way may leave its edit
+  /// half applied. The commands that completed are added to the history, so
+  /// the next undo reverts them along with any partial change.
+  void _abortTransaction(Object error) {
+    // The failed command's events, and any commands it queued but never ran.
+    final partialChanges = _commandExecutor.copyChangeList();
+    _commandExecutor.reset();
+
+    if (!_isInTransaction) {
+      return;
+    }
+
+    editorEditsLog.warning("A transaction failed, keeping the changes made so far: $error");
+
+    final transaction = _transaction;
+    if (isHistoryEnabled && transaction != null && transaction.commands.isNotEmpty) {
+      _history.add(transaction);
+    }
+    final changeList = [...?_activeChangeList, ...partialChanges];
+
+    _isInTransaction = false;
+    _isImplicitTransaction = false;
+    _transaction = null;
+    _activeCommandCount = 0;
+    _isReacting = false;
+    _activeChangeList = null;
+
+    // Don't let a second error here replace the one being rethrown.
+    try {
+      _endTransactionOnEditables(changeList);
+      _notifyListeners(List.from(changeList, growable: false));
+    } catch (followUpError) {
+      editorEditsLog.severe("Failed to close the aborted transaction: $followUpError");
+    }
+  }
+
+  /// Ends the transaction on every [Editable], even if one of them throws, so
+  /// that none is left with its notifications paused. Rethrows the first error.
+  void _endTransactionOnEditables(List<EditEvent> changeList) {
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    for (final editable in context._resources.values) {
+      try {
+        editable.onTransactionEnd(changeList);
+      } catch (error, stackTrace) {
+        firstError ??= error;
+        firstStackTrace ??= stackTrace;
+      }
+    }
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStackTrace!);
+    }
   }
 
   void _onTransactionStart() {
@@ -772,6 +854,9 @@ class _DocumentEditorCommandExecutor implements CommandExecutor {
 
   void reset() {
     _changeList.clear();
+    // Pancake fork: a command that throws leaves its remaining sub-commands
+    // queued, and they would run during the next, unrelated command.
+    _commandsBeingProcessed.clear();
   }
 }
 
@@ -995,6 +1080,14 @@ class EditorCommandQueue {
   /// Appends the given [command] to the end of the execution queue.
   void append(EditCommand command) {
     _commandBacklog.add(command);
+  }
+
+  /// Pancake fork: drops every queued command, including those left behind by
+  /// a command that threw mid-execution.
+  void clear() {
+    _activeCommand = null;
+    _activeCommandExpansionQueue.clear();
+    _commandBacklog.clear();
   }
 }
 
