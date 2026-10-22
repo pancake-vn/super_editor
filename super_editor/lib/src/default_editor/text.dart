@@ -32,6 +32,17 @@ import 'paragraph.dart';
 import 'selection_upstream_downstream.dart';
 import 'text_tools.dart';
 
+/// An inline placeholder that has a plain-text form when it's copied.
+///
+/// [TextNode.copyContent] writes [copyText] for placeholders that implement
+/// this interface, and the object replacement character for all others. Only
+/// copying changes: [AttributedText.toPlainText] still uses one replacement
+/// character per placeholder, so text offsets are unaffected.
+abstract interface class CopyablePlaceholder {
+  /// The text written in place of this placeholder when its text is copied.
+  String get copyText;
+}
+
 @immutable
 class TextNode extends DocumentNode {
   TextNode({
@@ -151,8 +162,22 @@ class TextNode extends DocumentNode {
   @override
   String copyContent(dynamic selection) {
     assert(selection is TextSelection);
+    selection as TextSelection;
 
-    return (selection as TextSelection).textInside(text.toPlainText());
+    final plainText = text.toPlainText();
+    final placeholders = text.placeholders;
+    if (placeholders.isEmpty) {
+      return selection.textInside(plainText);
+    }
+
+    // Copy placeholders that know their plain-text form as that text, instead
+    // of the object replacement character that `toPlainText()` uses for them.
+    final buffer = StringBuffer();
+    for (int i = selection.start; i < selection.end; i++) {
+      final placeholder = placeholders[i];
+      buffer.write(placeholder is CopyablePlaceholder ? placeholder.copyText : plainText[i]);
+    }
+    return buffer.toString();
   }
 
   @override
