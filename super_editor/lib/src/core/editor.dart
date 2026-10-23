@@ -484,7 +484,10 @@ class Editor implements RequestDispatcher {
     }
 
     editorEditsLog.info("Running undo");
-    if (_history.isEmpty) {
+    if (_history.every(_isSelectionAndComposingOnly)) {
+      // Nothing but caret and composing-region moves are left. There's no content
+      // change to undo, and popping them would leave the composer without a
+      // selection, which closes the IME and unfocuses the editor.
       return;
     }
 
@@ -714,15 +717,18 @@ class _NeverMergePolicy implements HistoryGroupingPolicy {
 
 const mergeRepeatSelectionChangesPolicy = MergeRepeatSelectionChangesPolicy();
 
+/// Whether every change in [transaction] is a selection or composing-region change,
+/// i.e. the transaction didn't change any content.
+bool _isSelectionAndComposingOnly(CommandTransaction transaction) =>
+    transaction.changes.every((change) => change is SelectionChangeEvent || change is ComposingRegionChangeEvent);
+
 class MergeRepeatSelectionChangesPolicy implements HistoryGroupingPolicy {
   const MergeRepeatSelectionChangesPolicy();
 
   @override
   TransactionMerge shouldMergeLatestTransaction(
       CommandTransaction newTransaction, CommandTransaction previousTransaction) {
-    final isNewTransactionAllSelectionAndComposing = newTransaction.changes
-        .where((change) => change is! SelectionChangeEvent && change is! ComposingRegionChangeEvent)
-        .isEmpty;
+    final isNewTransactionAllSelectionAndComposing = _isSelectionAndComposingOnly(newTransaction);
 
     if (!isNewTransactionAllSelectionAndComposing) {
       // The new transaction contains meaningful changes. Let other policies decide
@@ -730,9 +736,7 @@ class MergeRepeatSelectionChangesPolicy implements HistoryGroupingPolicy {
       return TransactionMerge.noOpinion;
     }
 
-    final isPreviousTransactionAllSelectionAndComposing = previousTransaction.changes
-        .where((change) => change is! SelectionChangeEvent && change is! ComposingRegionChangeEvent)
-        .isEmpty;
+    final isPreviousTransactionAllSelectionAndComposing = _isSelectionAndComposingOnly(previousTransaction);
 
     if (!isPreviousTransactionAllSelectionAndComposing) {
       // The previous transaction contains meaningful changes. Add the new selection/composing

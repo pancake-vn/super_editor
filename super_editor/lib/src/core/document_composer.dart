@@ -101,10 +101,22 @@ class MutableDocumentComposer extends DocumentComposer implements Editable {
   MutableDocumentComposer({
     DocumentSelection? initialSelection,
     SuperEditorImeConfiguration? imeConfiguration,
-  }) : super(
+  })  : _selectionSnapshot = initialSelection,
+        super(
           initialSelection: initialSelection,
           imeConfiguration: imeConfiguration,
         );
+
+  /// The selection that [reset] restores, captured at construction and
+  /// re-captured by [checkpoint].
+  ///
+  /// [Editor.undo] resets every [Editable] to its checkpoint and replays the
+  /// remaining history. The document reverts to the nodes it had at that
+  /// checkpoint, so the composer reverts to the selection it had at the same
+  /// moment. Resetting to `null` instead drops the caret whenever undo empties
+  /// the history, and the IME policies then close the connection and unfocus
+  /// the editor.
+  DocumentSelection? _selectionSnapshot;
 
   bool _isInTransaction = false;
   bool _didChangeSelectionDuringTransaction = false;
@@ -171,15 +183,19 @@ class MutableDocumentComposer extends DocumentComposer implements Editable {
 
   @override
   void reset() {
-    _selectionNotifier.value = null;
-    _latestSelectionChange = null;
+    _selectionNotifier.value = _selectionSnapshot;
+    _latestSelectionChange = _selectionSnapshot == null
+        ? null
+        : DocumentSelectionChange(selection: _selectionSnapshot, reason: SelectionReason.contentChange);
+    // The composing region belongs to an IME exchange that the undo/redo
+    // invalidates, so it's cleared rather than restored.
     _composingRegion.value = null;
     _didReset = true;
   }
 
   @override
   void checkpoint() {
-    // No-op: the composer has no stored "initial state" to re-anchor.
+    _selectionSnapshot = selection;
   }
 }
 

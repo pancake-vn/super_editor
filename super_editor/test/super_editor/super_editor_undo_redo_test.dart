@@ -511,6 +511,76 @@ This is paragraph 3''');
         });
       });
     });
+
+    group("keeps the caret >", () {
+      test("undo back to a checkpoint restores the checkpoint selection", () {
+        final document = MutableDocument(nodes: [ParagraphNode(id: "1", text: AttributedText())]);
+        final composer = MutableDocumentComposer();
+        final editor = createDefaultDocumentEditor(document: document, composer: composer, isHistoryEnabled: true);
+
+        const caret = DocumentSelection.collapsed(
+          position: DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 0)),
+        );
+        editor.execute([
+          const ChangeSelectionRequest(caret, SelectionChangeType.placeCaret, SelectionReason.userInteraction),
+        ]);
+        editor.clearHistory();
+
+        editor.execute([
+          InsertTextRequest(documentPosition: caret.extent, textToInsert: "abc", attributions: {}),
+        ]);
+        editor.undo();
+
+        expect((document.first as ParagraphNode).text.toPlainText(), "");
+        expect(composer.selection, caret);
+      });
+
+      testWidgetsOnMac("when undo empties the history after a checkpoint", (tester) async {
+        final testContext = await tester //
+            .createDocument()
+            .withSingleEmptyParagraph()
+            .enableHistory(true)
+            .withHistoryGroupingPolicy(defaultMergePolicy)
+            .pump();
+
+        await tester.placeCaretInParagraph("1", 0);
+        testContext.editor.clearHistory();
+
+        await tester.typeImeText("Hello");
+        expect(testContext.editor.history.length, 1);
+
+        await tester.pressCmdZ(tester);
+        await tester.pump();
+
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "");
+        expect(SuperEditorInspector.findDocumentSelection(), isNotNull);
+        expect(SuperEditorInspector.hasFocus(), isTrue);
+      });
+
+      testWidgetsOnMac("when only the caret placement is left to undo", (tester) async {
+        final testContext = await tester //
+            .createDocument()
+            .withSingleEmptyParagraph()
+            .enableHistory(true)
+            .withHistoryGroupingPolicy(defaultMergePolicy)
+            .pump();
+
+        // The editor starts without a selection, so placing the caret is the
+        // first transaction in history.
+        await tester.placeCaretInParagraph("1", 0);
+        await tester.typeImeText("Hello");
+        expect(testContext.editor.history.length, 2);
+
+        await tester.pressCmdZ(tester);
+        await tester.pump();
+        await tester.pressCmdZ(tester);
+        await tester.pump();
+
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "");
+        expect(SuperEditorInspector.findDocumentSelection(), isNotNull);
+        expect(SuperEditorInspector.hasFocus(), isTrue);
+      });
+    });
   });
 }
 
